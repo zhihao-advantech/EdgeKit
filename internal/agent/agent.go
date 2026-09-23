@@ -1,5 +1,10 @@
-// Package agent implements the EdgeKit AI agent: a natural-language assistant
-// that drives the serial / SSH / SFTP sessions through a tool interface.
+// Package agent implements EdgeKit's built-in agent: a natural-language
+// assistant that drives connected devices through the tools contributed by the
+// installed kits.
+//
+// The agent does not define tools itself — it consumes a kit.Registry, so a
+// capability is declared once (in a kit) and shared by the agent, the UI
+// protocol and, later, an MCP server.
 //
 // With an OpenAI-compatible model configured it runs a function-calling loop;
 // without one it falls back to deterministic built-in workflows (inspection,
@@ -11,17 +16,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"path/filepath"
-
-	"edgekit/internal/netdiag"
-	"edgekit/internal/sftpx"
+	"edgekit/internal/kit"
 	"edgekit/internal/workspace"
 )
 
@@ -63,6 +63,15 @@ type Config struct {
 	Target  string `json:"target"` // "remote" (default) or "local"
 }
 
+// Deps and the capability interfaces are aliases of the kit package, so the
+// host implements them once for the kits and the agent alike.
+type (
+	Deps         = kit.Deps
+	SerialAccess = kit.Serial
+	SSHAccess    = kit.SSH
+	SFTPAccess   = kit.SFTP
+)
+
 // Target returns the currently selected target (defaults to Remote). The old
 // "edge"/"host" values are still accepted for backward compatibility.
 func (m *Manager) Target() string {
@@ -83,70 +92,32 @@ func targetLabel(target string) string {
 	return "Remote（远端设备）"
 }
 
-// SerialAccess is the serial capability the agent needs.
-type SerialAccess interface {
-	IsOpen() bool
-	Port() string
-	Write(p []byte) error
-	Recent() []byte
-	RunCapture(command string, quiet, timeout time.Duration) (string, error)
-}
-
-// SSHAccess is the SSH capability the agent needs.
-type SSHAccess interface {
-	IsConnected() bool
-	Target() string
-	ExecCapture(command string, maxBytes int) (string, error)
-}
-
-// SFTPAccess is the SFTP capability the agent needs.
-type SFTPAccess interface {
-	IsConnected() bool
-	List(path string) ([]sftpx.Entry, error)
-	Download(path string) ([]byte, error)
-	Upload(path string, data []byte) error
-}
-
-// Deps bundles the backend capabilities.
-type Deps struct {
-	Serial SerialAccess
-	SSH    SSHAccess
-	SFTP   SFTPAccess
-}
-
-type tool struct {
-	name        string
-	description string
-	mutating    bool
-	schema      map[string]any
-	run         func(ctx context.Context, args map[string]any) (string, error)
-}
-
-// Manager runs agent turns.
+// Manager runs agent turns against the tools in a kit registry.
 type Manager struct {
-	mu      sync.Mutex
-	cfg     Config
-	deps    Deps
-	history []chatMessage
-	tools   []*tool
-	byName  map[string]*tool
-	pending map[string]chan bool
-	seq     int
-	cancel  context.CancelFunc
-	running bool
-	onEvent func(Event)
+	mu       sync.Mutex
+	cfg      Config
+	deps     Deps
+	registry *kit.Registry
+	history  []chatMessage
+	pending  map[string]chan bool
+	seq      int
+	cancel   context.CancelFunc
+	running  bool
+	onEvent  func(Event)
 }
 
-// New builds an agent manager.
-func New(deps Deps, onEvent func(Event)) *Manager {
-	m := &Manager{
-		deps:    deps,
-		pending: make(map[string]chan bool),
-		byName:  make(map[string]*tool),
-		onEvent: onEvent,
+// New builds an agent manager backed by reg. deps is used to describe the
+// current environment in the system prompt.
+func New(reg *kit.Registry, deps Deps, onEvent func(Event)) *Manager {
+	if reg == nil {
+		reg = kit.NewRegistry()
 	}
-	m.registerTools()
-	return m
+	return &Manager{
+		deps:     deps,
+		registry: reg,
+		pending:  make(map[string]chan bool),
+		onEvent:  onEvent,
+	}
 }
 
 // Config returns the current model configuration.
@@ -270,42 +241,40 @@ func (m *Manager) nextID() string {
 	return fmt.Sprintf("t%d", m.seq)
 }
 
-// runTool executes a tool, asking for approval when required.
+// runTool executes a registry tool, asking for approval when required.
 func (m *Manager) runTool(ctx context.Context, name string, args map[string]any, force bool) (string, error) {
-	m.mu.Lock()
-	t := m.byName[name]
-	m.mu.Unlock()
-	if t == nil {
+	t, ok := m.registry.Tool(name)
+	if !ok {
 		return "", fmt.Errorf("未知工具: %s", name)
 	}
 	argText := marshalArgs(args)
 
-	if t.mutating && !force && !m.autoRun() {
-		if !m.requestApproval(ctx, t, argText) {
+	if t.Mutating() && !force && !m.autoRun() {
+		if !m.requestApproval(ctx, name, argText) {
 			m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: "denied", Result: "用户拒绝执行"})
 			return "用户拒绝执行该操作", nil
 		}
 	}
 
 	m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: "running"})
-	out, err := t.run(ctx, args)
+	out, err := t.Call(ctx, args)
 	state := "ok"
 	if err != nil {
 		state = "error"
 		out = err.Error()
 	}
-	m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: state, Result: truncate(out, 4000)})
+	m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: state, Result: kit.Truncate(out, 4000)})
 	return out, err
 }
 
-func (m *Manager) requestApproval(ctx context.Context, t *tool, argText string) bool {
+func (m *Manager) requestApproval(ctx context.Context, toolName, argText string) bool {
 	id := m.nextID()
 	ch := make(chan bool, 1)
 	m.mu.Lock()
 	m.pending[id] = ch
 	m.mu.Unlock()
 
-	m.emit(Event{Kind: KindApproval, ID: id, Tool: t.name, Args: argText, State: "pending"})
+	m.emit(Event{Kind: KindApproval, ID: id, Tool: toolName, Args: argText, State: "pending"})
 
 	select {
 	case allow := <-ch:
@@ -326,6 +295,7 @@ func (m *Manager) requestApproval(ctx context.Context, t *tool, argText string) 
 /* ------------------------------------------------------------------ *
  * built-in workflows (no model configured)
  * ------------------------------------------------------------------ */
+
 // remoteExecTool picks the best transport to run a command on the remote device:
 // SSH when connected, otherwise the serial console.
 func (m *Manager) remoteExecTool() string {
@@ -442,7 +412,7 @@ func localHelp() string {
 		"· ping 192.0.2.10（从本机检测连通性与端口）",
 		"",
 		"这些操作会作用于当前「目标」：Local（本机）或 Remote（远端设备），",
-		"可在 Agent 标题栏切换目标。",
+		"可在「会话信息」面板切换目标。",
 		"",
 		"在左侧「会话设置 → Agent」中填入 OpenAI 兼容的 Base URL、API Key 与模型名后，",
 		"即可用自然语言驱动串口 / SSH / 工作区完成更复杂的任务。",
@@ -458,67 +428,6 @@ func hasAny(s string, keys ...string) bool {
 	return false
 }
 
-// hostExec runs a command on the local machine (Local target).
-func hostExec(ctx context.Context, command string, maxBytes int) (string, error) {
-	if strings.TrimSpace(command) == "" {
-		return "", fmt.Errorf("命令为空")
-	}
-	if maxBytes <= 0 {
-		maxBytes = 64 * 1024
-	}
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	buf := &capBuffer{max: maxBytes}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-	runErr := cmd.Run()
-	out := buf.String()
-	if runErr != nil {
-		if out == "" {
-			return "", fmt.Errorf("命令执行失败: %w", runErr)
-		}
-		out += "\n(exit: " + runErr.Error() + ")"
-	}
-	return out, nil
-}
-
-// capBuffer collects at most max bytes.
-type capBuffer struct {
-	max       int
-	buf       []byte
-	truncated bool
-}
-
-func (b *capBuffer) Write(p []byte) (int, error) {
-	if room := b.max - len(b.buf); room > 0 {
-		n := room
-		if n > len(p) {
-			n = len(p)
-		}
-		b.buf = append(b.buf, p[:n]...)
-		if n < len(p) {
-			b.truncated = true
-		}
-	} else {
-		b.truncated = true
-	}
-	return len(p), nil
-}
-
-func (b *capBuffer) String() string {
-	s := string(b.buf)
-	if b.truncated {
-		s += "\n…(输出已截断)"
-	}
-	return s
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…(已截断)"
-}
-
 func marshalArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return ""
@@ -530,303 +439,11 @@ func marshalArgs(args map[string]any) string {
 	return string(b)
 }
 
-func argString(args map[string]any, key string) string {
-	if v, ok := args[key].(string); ok {
-		return v
+// workspaceRoot is kept for the system prompt.
+func workspaceRoot() string {
+	root, err := workspace.Root()
+	if err != nil {
+		return ""
 	}
-	return ""
-}
-
-func argInt(args map[string]any, key string, def int) int {
-	switch v := args[key].(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	case string:
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return def
-}
-
-/* ------------------------------------------------------------------ *
- * tool registry
- * ------------------------------------------------------------------ */
-func obj(props map[string]any, required ...string) map[string]any {
-	m := map[string]any{"type": "object", "properties": props}
-	if len(required) > 0 {
-		m["required"] = required
-	}
-	return m
-}
-func sType() map[string]any { return map[string]any{"type": "string"} }
-func iType() map[string]any { return map[string]any{"type": "integer"} }
-
-func (m *Manager) registerTools() {
-	m.tools = []*tool{
-		{
-			name:        "local_info",
-			description: "获取 Local（运行 EdgeKit 的本机）的主机名、系统、CPU 等信息",
-			schema:      obj(nil),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				return netdiag.SysInfo(), nil
-			},
-		},
-		{
-			name:        "local_exec",
-			description: "在 Local（运行 EdgeKit 的本机）上执行 shell 命令并返回输出",
-			mutating:    true,
-			schema:      obj(map[string]any{"command": sType()}, "command"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				return hostExec(ctx, argString(args, "command"), 64*1024)
-			},
-		},
-		{
-			name:        "net_ping",
-			description: "对目标主机执行 ICMP ping，返回连通性与延迟",
-			schema:      obj(map[string]any{"host": sType(), "count": iType()}, "host"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				return netdiag.Ping(ctx, argString(args, "host"), argInt(args, "count", 4))
-			},
-		},
-		{
-			name:        "net_check_port",
-			description: "检查目标主机某个 TCP 端口是否开放",
-			schema:      obj(map[string]any{"host": sType(), "port": iType()}, "host", "port"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				host := argString(args, "host")
-				port := argInt(args, "port", 22)
-				open, rtt, err := netdiag.CheckPort(host, port)
-				if err != nil {
-					return "", err
-				}
-				if open {
-					return fmt.Sprintf("%s:%d 开放，耗时 %d ms", host, port, rtt.Milliseconds()), nil
-				}
-				return fmt.Sprintf("%s:%d 不可达", host, port), nil
-			},
-		},
-		{
-			name:        "net_resolve",
-			description: "解析域名对应的 IP 地址",
-			schema:      obj(map[string]any{"host": sType()}, "host"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				ips, err := netdiag.Resolve(argString(args, "host"))
-				if err != nil {
-					return "", err
-				}
-				return strings.Join(ips, "\n"), nil
-			},
-		},
-		{
-			name:        "serial_status",
-			description: "查询串口会话是否已打开及其参数",
-			schema:      obj(nil),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.Serial == nil || !m.deps.Serial.IsOpen() {
-					return "串口未打开", nil
-				}
-				return "串口已打开: " + m.deps.Serial.Port(), nil
-			},
-		},
-		{
-			name:        "serial_read",
-			description: "读取串口最近接收到的数据（文本）",
-			schema:      obj(nil),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.Serial == nil || !m.deps.Serial.IsOpen() {
-					return "", fmt.Errorf("串口未打开")
-				}
-				data := m.deps.Serial.Recent()
-				if len(data) == 0 {
-					return "(暂无数据)", nil
-				}
-				if len(data) > 8192 {
-					data = data[len(data)-8192:]
-				}
-				return strings.ToValidUTF8(string(data), "�"), nil
-			},
-		},
-		{
-			name:        "serial_write",
-			description: "向串口发送数据（会自动追加换行）",
-			mutating:    true,
-			schema:      obj(map[string]any{"data": sType()}, "data"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.Serial == nil || !m.deps.Serial.IsOpen() {
-					return "", fmt.Errorf("串口未打开")
-				}
-				data := argString(args, "data")
-				if !strings.HasSuffix(data, "\n") {
-					data += "\n"
-				}
-				if err := m.deps.Serial.Write([]byte(data)); err != nil {
-					return "", err
-				}
-				return "已发送: " + strconv.Quote(strings.TrimRight(data, "\n")), nil
-			},
-		},
-		{
-			name:        "serial_exec",
-			description: "通过串口向设备发送命令并抓取回显（需要设备侧有 shell，串口已打开）",
-			mutating:    true,
-			schema:      obj(map[string]any{"command": sType()}, "command"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.Serial == nil || !m.deps.Serial.IsOpen() {
-					return "", fmt.Errorf("串口未打开")
-				}
-				out, err := m.deps.Serial.RunCapture(argString(args, "command"), 500*time.Millisecond, 8*time.Second)
-				if err != nil {
-					return "", err
-				}
-				return truncate(strings.TrimSpace(out), 16*1024), nil
-			},
-		},
-		{
-			name:        "ssh_status",
-			description: "查询 SSH 会话是否已连接及其目标",
-			schema:      obj(nil),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.SSH == nil || !m.deps.SSH.IsConnected() {
-					return "SSH 未连接", nil
-				}
-				return "SSH 已连接: " + m.deps.SSH.Target(), nil
-			},
-		},
-		{
-			name:        "ssh_exec",
-			description: "在 Remote（远端设备）上通过 SSH 执行一条 shell 命令并返回输出",
-			mutating:    true,
-			schema:      obj(map[string]any{"command": sType()}, "command"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.SSH == nil || !m.deps.SSH.IsConnected() {
-					return "", fmt.Errorf("SSH 未连接")
-				}
-				return m.deps.SSH.ExecCapture(argString(args, "command"), 64*1024)
-			},
-		},
-		{
-			name:        "sftp_status",
-			description: "查询 SFTP 文件传输会话是否已连接",
-			schema:      obj(nil),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.SFTP == nil || !m.deps.SFTP.IsConnected() {
-					return "SFTP 未连接", nil
-				}
-				return "SFTP 已连接", nil
-			},
-		},
-		{
-			name:        "sftp_list",
-			description: "列出 SFTP 远端目录内容",
-			schema:      obj(map[string]any{"path": sType()}, "path"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.SFTP == nil || !m.deps.SFTP.IsConnected() {
-					return "", fmt.Errorf("SFTP 未连接")
-				}
-				entries, err := m.deps.SFTP.List(argString(args, "path"))
-				if err != nil {
-					return "", err
-				}
-				var b strings.Builder
-				for _, e := range entries {
-					kind := "file"
-					if e.IsDir {
-						kind = "dir "
-					}
-					fmt.Fprintf(&b, "%s %10d  %s\n", kind, e.Size, e.Name)
-				}
-				return b.String(), nil
-			},
-		},
-		{
-			name:        "sftp_download",
-			description: "把远端文件下载到本地工作区，返回本地路径",
-			schema:      obj(map[string]any{"path": sType()}, "path"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.SFTP == nil || !m.deps.SFTP.IsConnected() {
-					return "", fmt.Errorf("SFTP 未就绪（请先连接 SSH）")
-				}
-				remote := argString(args, "path")
-				data, err := m.deps.SFTP.Download(remote)
-				if err != nil {
-					return "", err
-				}
-				local, err := workspace.Write(filepath.Base(remote), data)
-				if err != nil {
-					return "", err
-				}
-				return fmt.Sprintf("已下载 %s → %s（%d 字节）", remote, local, len(data)), nil
-			},
-		},
-		{
-			name:        "workspace_list",
-			description: "列出本地工作区目录内容",
-			schema:      obj(map[string]any{"path": sType()}),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				list, err := workspace.List(argString(args, "path"))
-				if err != nil {
-					return "", err
-				}
-				if len(list) == 0 {
-					return "(空目录)", nil
-				}
-				var b strings.Builder
-				for _, e := range list {
-					kind := "file"
-					if e.IsDir {
-						kind = "dir "
-					}
-					fmt.Fprintf(&b, "%s %10d  %s\n", kind, e.Size, e.Name)
-				}
-				return b.String(), nil
-			},
-		},
-		{
-			name:        "workspace_read",
-			description: "读取本地工作区中的文本文件",
-			schema:      obj(map[string]any{"path": sType()}, "path"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				data, err := workspace.Read(argString(args, "path"))
-				if err != nil {
-					return "", err
-				}
-				return truncate(strings.ToValidUTF8(string(data), "\uFFFD"), 16*1024), nil
-			},
-		},
-		{
-			name:        "workspace_write",
-			description: "在本地工作区写入文本文件（固件、配置、脚本等）",
-			mutating:    true,
-			schema:      obj(map[string]any{"path": sType(), "content": sType()}, "path", "content"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				local, err := workspace.Write(argString(args, "path"), []byte(argString(args, "content")))
-				if err != nil {
-					return "", err
-				}
-				return "已写入 " + local, nil
-			},
-		},
-		{
-			name:        "sftp_upload",
-			description: "把文本内容写入 SFTP 远端文件",
-			mutating:    true,
-			schema:      obj(map[string]any{"path": sType(), "content": sType()}, "path", "content"),
-			run: func(ctx context.Context, args map[string]any) (string, error) {
-				if m.deps.SFTP == nil || !m.deps.SFTP.IsConnected() {
-					return "", fmt.Errorf("SFTP 未连接")
-				}
-				path := argString(args, "path")
-				if err := m.deps.SFTP.Upload(path, []byte(argString(args, "content"))); err != nil {
-					return "", err
-				}
-				return "已写入 " + path, nil
-			},
-		},
-	}
-	for _, t := range m.tools {
-		m.byName[t.name] = t
-	}
+	return root
 }

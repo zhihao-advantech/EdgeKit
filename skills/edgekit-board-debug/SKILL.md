@@ -118,7 +118,8 @@ WebSocket API：与界面走同一套协议，适合 Agent 直接调用（见第
 
 ## 6. 内置 Agent 工具清单
 
-内置 Agent 在这些工具上做 function-calling（只读工具自动执行，**修改性工具默认需用户确认**）：
+工具由内置 Kit 提供（Host / Network / Serial / SSH / SFTP / Workspace），Agent 在它们之上做
+function-calling（只读工具自动执行，**修改性工具默认需用户确认**）：
 
 | 工具 | 作用 | 修改性 |
 | --- | --- | --- |

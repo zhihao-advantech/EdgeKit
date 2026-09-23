@@ -22,6 +22,26 @@ AI Agent、串口调试、SSH 终端、工作区文件管理，支持**同时连
                                                 └────────────────────────────────┘
 ```
 
+## Kit 架构
+
+能力以 **Kit**（能力包）形式提供，宿主（Host）聚合各 Kit 贡献的工具，**内置 Agent、UI 协议与后续的 MCP Server 共用同一份定义**：
+
+- 内置 Kit：`Host`、`Network`、`Serial`、`SSH`、`SFTP`、`Workspace`，共 18 个工具
+- 每个 Kit 带 `Manifest`（`id` / `name` / `version` / `license` / `runtime` / `activation`）
+  与一组 `Tool`（JSON Schema + 风险等级 `read` / `mutate` / `dangerous`）
+- 宿主对非 `read` 工具要求审批（沿用现有 approval 流程）
+- 「帮助 → 关于」可查看已加载的 Kit 与工具统计
+
+代码结构：
+
+```
+internal/kit/    Kit / Manifest / Tool / Registry 与能力接口（Serial / SSH / SFTP）
+internal/kits/   内置 Kit 实现，Builtin(deps) 返回全部
+internal/agent/  只消费 kit.Registry，不再硬编码工具
+```
+
+后续阶段：`kit.json` 外置清单、外置 Kit（协议走 MCP）、Kits 管理页。
+
 ## Agent 连板调试
 
 如果要让 Agent（而非人工）用 EdgeKit 做串口 / SSH 连板调试，见
@@ -209,7 +229,9 @@ cmd/edgekit/            程序入口，创建 WebView 并加载本地服务
 internal/serial/        串口管理器（枚举 / 打开 / 读写）
 internal/sshclient/     SSH 终端（连接 / exec / 交互式 Shell）
 internal/sshutil/       SSH 连接参数与拨号（sshclient 与 sftpx 共用）
-internal/agent/         AI Agent（工具集、Normal 模式、模型调用、审批）
+internal/kit/           Kit 扩展模型（Manifest / Tool / Registry / 能力接口）
+internal/kits/          内置 Kit（Host / Network / Serial / SSH / SFTP / Workspace）
+internal/agent/         AI Agent（消费 Registry、Normal 模式、模型调用、审批）
 internal/netdiag/       网络检查（ping / 端口 / DNS / 本机信息）
 internal/sftpx/         SFTP 文件浏览与传输（挂在 SSH 连接上）
 internal/workspace/     本地工作区（沙箱化文件操作）

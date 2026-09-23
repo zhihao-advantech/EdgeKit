@@ -324,6 +324,7 @@
       selected: null,
       visible: true,
     },
+    kits: { kits: [], tools: [] },
     localEcho: false,
     sidebar: true,
     fontScale: 1,
@@ -613,6 +614,7 @@
       case "agent.event": onAgentEvent(msg.payload || {}); break;
       case "agent.config": onAgentConfig(msg.payload || {}); break;
       case "settings": applySettings(msg.payload); break;
+      case "kits": state.kits = msg.payload || { kits: [], tools: [] }; break;
       case "fs.files": onFSFiles(msg.payload || {}); break;
       case "fs.done": onFSDone(msg.payload || {}); break;
       case "fs.content": onFSContent(msg.payload || {}); break;
@@ -1523,6 +1525,18 @@
     });
   }
 
+  // Installed kits, contributed by the host (phase-1 Kit manifest plumbing).
+  function kitsSection() {
+    const kits = state.kits.kits || [];
+    const tools = state.kits.tools || [];
+    if (!kits.length) return "";
+    const mutating = tools.filter((t) => t.risk !== "read").length;
+    const items = kits
+      .map((k) => `<li><b>${esc(k.name)}</b> <span class="muted">v${esc(k.version)}${k.license ? " · " + esc(k.license) : ""} — ${esc(k.description || "")}</span></li>`)
+      .join("");
+    return `<p class="muted">已加载 ${kits.length} 个 Kit，共 ${tools.length} 个工具（${tools.length - mutating} 只读 / ${mutating} 修改）：</p><ul>${items}</ul>`;
+  }
+
   function showAbout() {
     showModal("关于 EdgeKit", `
       <h4>EdgeKit</h4>
@@ -1533,6 +1547,7 @@
         <li>Agent 会话：自然语言驱动串口 / SSH / 工作区，含安全审批</li>
         <li>工作区：本地 / 远端（SFTP）文件浏览与上传下载，串口模式尝试列出设备目录</li>
       </ul>
+      ${kitsSection()}
       <p class="muted">后续将持续演进：AI 辅助诊断、设备自动发现、批量运维与智能编排。</p>
     `);
   }

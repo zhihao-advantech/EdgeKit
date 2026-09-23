@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"edgekit/internal/agent"
+	"edgekit/internal/kit"
+	"edgekit/internal/kits"
 	"edgekit/internal/serial"
 	"edgekit/internal/sftpx"
 	"edgekit/internal/sshclient"
@@ -60,6 +62,8 @@ type deviceSession struct {
 // Server wires the backends to the browser clients.
 type Server struct {
 	agent *agent.Manager
+	deps  kit.Deps
+	kits  *kit.Registry
 	batch *streamBatcher
 
 	mu       sync.Mutex
@@ -81,11 +85,18 @@ func New() *Server {
 		sessions: make(map[string]*deviceSession),
 		clients:  make(map[*client]struct{}),
 	}
-	s.agent = agent.New(agent.Deps{
+	// The focused-session proxies are the capabilities every built-in kit and
+	// the agent resolve against, so a tool call always acts on the selected device.
+	s.deps = kit.Deps{
 		Serial: focusedSerial{s},
 		SSH:    focusedSSH{s},
 		SFTP:   focusedSFTP{s},
-	}, s.onAgentEvent)
+	}
+	s.kits = kit.NewRegistry()
+	for _, k := range kits.Builtin(s.deps) {
+		s.kits.Register(k)
+	}
+	s.agent = agent.New(s.kits, s.deps, s.onAgentEvent)
 	s.batch = newStreamBatcher(s.emitStream)
 	// Preload the persisted model config so the agent works even when driven
 	// without the UI (e.g. by an external tool over the WebSocket API).
@@ -581,6 +592,19 @@ func (s *Server) sendStatus(c *client) {
 	s.sendTo(c, "sessions", s.sessionsSnapshot())
 	s.sendTo(c, "agent.config", s.agent.Config())
 	s.sendTo(c, "settings", loadSettings())
+	s.sendTo(c, "kits", s.kitsPayload())
+}
+
+// kitsPayload describes the installed kits and their tools to the UI.
+func (s *Server) kitsPayload() map[string]any {
+	tools := s.kits.Tools()
+	summary := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		summary = append(summary, map[string]any{
+			"name": t.Name, "risk": string(t.Risk), "description": t.Description,
+		})
+	}
+	return map[string]any{"kits": s.kits.Manifests(), "tools": summary}
 }
 
 /* ------------------------------------------------------------------ *

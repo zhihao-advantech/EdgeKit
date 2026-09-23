@@ -9,6 +9,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"edgekit/internal/kit"
+	"edgekit/internal/kits"
 )
 
 type stubSerial struct {
@@ -99,6 +102,15 @@ func mockLLM(t *testing.T, responses []string, requests *[]chatRequest) *httptes
 	return srv
 }
 
+// newTestManager builds an agent backed by the built-in kits.
+func newTestManager(deps Deps, on func(Event)) *Manager {
+	reg := kit.NewRegistry()
+	for _, k := range kits.Builtin(deps) {
+		reg.Register(k)
+	}
+	return New(reg, deps, on)
+}
+
 func TestAgentLLMToolCall(t *testing.T) {
 	var reqs []chatRequest
 	srv := mockLLM(t, []string{
@@ -107,7 +119,7 @@ func TestAgentLLMToolCall(t *testing.T) {
 	}, &reqs)
 
 	c := newCollector()
-	ag := New(Deps{}, c.on)
+	ag := newTestManager(Deps{}, c.on)
 	ag.SetConfig(Config{BaseURL: srv.URL, APIKey: "test", Model: "mock"})
 	ag.Send("检查 127.0.0.1 的 22 端口")
 	c.wait(t)
@@ -157,7 +169,7 @@ func TestAgentApproval(t *testing.T) {
 	}, nil)
 
 	c := newCollector()
-	ag := New(Deps{Serial: serial}, c.on)
+	ag := newTestManager(Deps{Serial: serial}, c.on)
 	ag.SetConfig(Config{BaseURL: srv.URL, APIKey: "test", Model: "mock", AutoRun: false})
 	ag.Send("重启设备")
 
@@ -184,7 +196,7 @@ func TestAgentApproval(t *testing.T) {
 
 func TestAgentLocalHelp(t *testing.T) {
 	c := newCollector()
-	ag := New(Deps{}, c.on)
+	ag := newTestManager(Deps{}, c.on)
 	ag.Send("你好")
 	c.wait(t)
 
@@ -205,7 +217,7 @@ func toolNames(c *collector) []string {
 }
 
 func TestTargetBackwardCompat(t *testing.T) {
-	ag := New(Deps{}, func(Event) {})
+	ag := newTestManager(Deps{}, func(Event) {})
 	cases := []struct {
 		in   string
 		want string
@@ -226,7 +238,7 @@ func TestTargetBackwardCompat(t *testing.T) {
 
 func TestLocalTargetRunsOnLocal(t *testing.T) {
 	c := newCollector()
-	ag := New(Deps{}, c.on)
+	ag := newTestManager(Deps{}, c.on)
 	ag.SetConfig(Config{Target: TargetLocal})
 	ag.Send("查看磁盘使用")
 	c.wait(t)
@@ -239,7 +251,7 @@ func TestLocalTargetRunsOnLocal(t *testing.T) {
 
 func TestRemoteTargetWithoutConnection(t *testing.T) {
 	c := newCollector()
-	ag := New(Deps{}, c.on)
+	ag := newTestManager(Deps{}, c.on)
 	ag.SetConfig(Config{Target: TargetRemote})
 	ag.Send("查看磁盘使用")
 	c.wait(t)
@@ -261,7 +273,7 @@ func TestRemoteTargetWithoutConnection(t *testing.T) {
 func TestRemoteTargetFallsBackToSerial(t *testing.T) {
 	serial := &stubSerial{open: true}
 	c := newCollector()
-	ag := New(Deps{Serial: serial}, c.on)
+	ag := newTestManager(Deps{Serial: serial}, c.on)
 	ag.SetConfig(Config{Target: TargetRemote})
 	ag.Send("查看系统版本")
 	c.wait(t)
@@ -276,7 +288,7 @@ func TestAgentLocalInspect(t *testing.T) {
 	serial := &stubSerial{open: true, recent: []byte("user@board:~# ")}
 	ssh := &stubSSH{out: "Linux board 5.15.0"}
 	c := newCollector()
-	ag := New(Deps{Serial: serial, SSH: ssh}, c.on)
+	ag := newTestManager(Deps{Serial: serial, SSH: ssh}, c.on)
 	ag.Send("巡检设备状态")
 	c.wait(t)
 

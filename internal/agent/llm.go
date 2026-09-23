@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"edgekit/internal/workspace"
+	"edgekit/internal/kit"
 )
 
 // OpenAI-compatible chat message.
@@ -85,7 +85,7 @@ func (m *Manager) runLLM(ctx context.Context) {
 				Role:       "tool",
 				ToolCallID: tc.ID,
 				Name:       tc.Function.Name,
-				Content:    truncate(out, 8000),
+				Content:    kit.Truncate(out, 8000),
 			})
 		}
 	}
@@ -124,7 +124,7 @@ func (m *Manager) chat(ctx context.Context) (*chatMessage, error) {
 
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("模型返回 %d: %s", resp.StatusCode, truncate(string(data), 400))
+		return nil, fmt.Errorf("模型返回 %d: %s", resp.StatusCode, kit.Truncate(string(data), 400))
 	}
 	var out chatResponse
 	if err := json.Unmarshal(data, &out); err != nil {
@@ -139,16 +139,16 @@ func (m *Manager) chat(ctx context.Context) (*chatMessage, error) {
 	return &out.Choices[0].Message, nil
 }
 
+// toolSchemas projects the registry's tools into the OpenAI tool format.
 func (m *Manager) toolSchemas() []toolSchema {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]toolSchema, 0, len(m.tools))
-	for _, t := range m.tools {
+	tools := m.registry.Tools()
+	out := make([]toolSchema, 0, len(tools))
+	for _, t := range tools {
 		var ts toolSchema
 		ts.Type = "function"
-		ts.Function.Name = t.name
-		ts.Function.Description = t.description
-		ts.Function.Parameters = t.schema
+		ts.Function.Name = t.Name
+		ts.Function.Description = t.Description
+		ts.Function.Parameters = t.Schema
 		out = append(out, ts)
 	}
 	return out
@@ -177,7 +177,7 @@ func (m *Manager) systemPrompt() string {
 	} else {
 		b.WriteString("- SFTP 未就绪\n")
 	}
-	if root, err := workspace.Root(); err == nil {
+	if root := workspaceRoot(); root != "" {
 		fmt.Fprintf(&b, "- 本地工作区: %s\n", root)
 	}
 	return b.String()
