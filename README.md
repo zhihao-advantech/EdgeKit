@@ -295,6 +295,22 @@ internal/server/web/    内嵌的前端资源（HTML/CSS/JS）
 - Agent 的修改性工具默认需要用户逐次确认；「自动执行」会跳过确认，请谨慎开启。
 - 界面设置（含 API Key）保存在 `~/.config/edgekit/settings.json`（权限 0600）。
 
+## 许可证
+
+EdgeKit 以 **Apache License 2.0** 开源，全文见 [LICENSE](LICENSE)。
+
+```
+Copyright 2026 EdgeKit contributors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+```
+
+每个 Kit 自带 `license` 字段；外置 Kit 将以独立进程（MCP）接入，各自独立授权。
+
 ## 路线图
 
 EdgeKit 定位为 AI 加速端侧设备升级。当前版本先完成通用调试手段，

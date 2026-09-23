@@ -1566,6 +1566,7 @@
         <li>工作区：本地 / 远端（SFTP）文件浏览与上传下载，串口模式尝试列出设备目录</li>
       </ul>
       ${kitsSection()}
+      <p class="muted">许可证：Apache License 2.0（详见仓库 LICENSE 文件）。</p>
       <p class="muted">后续将持续演进：AI 辅助诊断、设备自动发现、批量运维与智能编排。</p>
     `);
   }
