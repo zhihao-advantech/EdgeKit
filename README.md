@@ -53,6 +53,27 @@ internal/agent/  只消费 kit.Registry，不再硬编码工具
 - 用途：**UI 回放**（刷新后恢复滚动内容）、跨通道关联、后续的 `wait_for_output` 与审计
 - 协议：`timeline` 请求 → `timeline.records` 事件（字段 `seq/time/channel/kind/data`）
 
+## MCP（OpenClaw / Claude Code 接入）
+
+EdgeKit 可以作为一个 **MCP 工具服务**被外部 Agent 驱动：`edgekit mcp` 用 stdio 讲 MCP，
+并把每个调用转发给**正在运行的 App**，因此 Agent 用的是你已经连好的串口 / SSH 会话，
+界面里的审批也照常生效。
+
+```bash
+# 1) 先启动 App（它会把端点发布到 ~/.config/edgekit/runtime.json）
+./build/edgekit
+
+# 2) 加入 OpenClaw（add 会先连上探活、成功后才保存）
+openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
+openclaw mcp probe edgekit        # -> edgekit: 18 tools
+```
+
+- 协议：MCP（JSON-RPC 2.0 over stdio），实现 `initialize` / `tools/list` / `tools/call`
+- 工具来自 kit Registry：**只读工具直接执行；修改性工具由 `internal/policy` 策略门
+  在 App 界面弹出审批**，与内置 Agent 走同一道闸
+- 其它 MCP 客户端（Claude Code / Codex CLI / Goose…）同样用 stdio 命令 `edgekit mcp`
+- App 未运行时桥接会明确报错——它复用 App 的会话，不会自己去占用串口
+
 ## Agent 连板调试
 
 如果要让 Agent（而非人工）用 EdgeKit 做串口 / SSH 连板调试，见
@@ -241,6 +262,9 @@ internal/serial/        串口管理器（枚举 / 打开 / 读写）
 internal/sshclient/     SSH 终端（连接 / exec / 交互式 Shell）
 internal/sshutil/       SSH 连接参数与拨号（sshclient 与 sftpx 共用）
 internal/timeline/      设备时间线（append-only 记录，UI/Agent/MCP 共用）
+internal/policy/        审批策略门（read / mutate / dangerous）
+internal/mcp/           最小 MCP server（JSON-RPC 2.0 over stdio）
+internal/runtime/       运行端点发布（供 edgekit mcp 发现 App）
 internal/kit/           Kit 扩展模型（Manifest / Tool / Registry / 能力接口）
 internal/kits/          内置 Kit（Host / Network / Serial / SSH / SFTP / Workspace）
 internal/agent/         AI Agent（消费 Registry、Normal 模式、模型调用、审批）

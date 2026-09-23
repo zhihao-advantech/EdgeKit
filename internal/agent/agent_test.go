@@ -12,6 +12,7 @@ import (
 
 	"edgekit/internal/kit"
 	"edgekit/internal/kits"
+	"edgekit/internal/policy"
 )
 
 type stubSerial struct {
@@ -103,12 +104,20 @@ func mockLLM(t *testing.T, responses []string, requests *[]chatRequest) *httptes
 }
 
 // newTestManager builds an agent backed by the built-in kits.
-func newTestManager(deps Deps, on func(Event)) *Manager {
+func newTestManager(deps Deps, gate *policy.Gate, on func(Event)) *Manager {
 	reg := kit.NewRegistry()
 	for _, k := range kits.Builtin(deps) {
 		reg.Register(k)
 	}
-	return New(reg, deps, on)
+	return New(reg, deps, gate, on)
+}
+
+// testGate returns a gate that lets everything through (force=false paths in
+// the macros already bypass it; the LLM path needs an approving gate).
+func testGate(autoRun bool) *policy.Gate {
+	g := policy.New(nil)
+	g.SetAutoRun(autoRun)
+	return g
 }
 
 func TestAgentLLMToolCall(t *testing.T) {
@@ -119,7 +128,7 @@ func TestAgentLLMToolCall(t *testing.T) {
 	}, &reqs)
 
 	c := newCollector()
-	ag := newTestManager(Deps{}, c.on)
+	ag := newTestManager(Deps{}, testGate(true), c.on)
 	ag.SetConfig(Config{BaseURL: srv.URL, APIKey: "test", Model: "mock"})
 	ag.Send("检查 127.0.0.1 的 22 端口")
 	c.wait(t)
@@ -169,16 +178,20 @@ func TestAgentApproval(t *testing.T) {
 	}, nil)
 
 	c := newCollector()
-	ag := newTestManager(Deps{Serial: serial}, c.on)
+	// A gate whose prompts surface as approval events, exactly like the host's.
+	gate := policy.New(func(req policy.Request) {
+		c.on(Event{Kind: KindApproval, ID: req.ID, Tool: req.Tool, Args: req.Args, State: "pending"})
+	})
+	ag := newTestManager(Deps{Serial: serial}, gate, c.on)
 	ag.SetConfig(Config{BaseURL: srv.URL, APIKey: "test", Model: "mock", AutoRun: false})
 	ag.Send("重启设备")
 
-	// wait for the approval request, then allow it
+	// wait for the approval request, then allow it through the gate
 	deadline := time.After(5 * time.Second)
 	for {
 		appr := c.find(KindApproval)
 		if len(appr) > 0 {
-			ag.Approve(appr[0].ID, true)
+			gate.Approve(appr[0].ID, true)
 			break
 		}
 		select {
@@ -196,7 +209,7 @@ func TestAgentApproval(t *testing.T) {
 
 func TestAgentLocalHelp(t *testing.T) {
 	c := newCollector()
-	ag := newTestManager(Deps{}, c.on)
+	ag := newTestManager(Deps{}, testGate(true), c.on)
 	ag.Send("你好")
 	c.wait(t)
 
@@ -217,7 +230,7 @@ func toolNames(c *collector) []string {
 }
 
 func TestTargetBackwardCompat(t *testing.T) {
-	ag := newTestManager(Deps{}, func(Event) {})
+	ag := newTestManager(Deps{}, testGate(true), func(Event) {})
 	cases := []struct {
 		in   string
 		want string
@@ -238,7 +251,7 @@ func TestTargetBackwardCompat(t *testing.T) {
 
 func TestLocalTargetRunsOnLocal(t *testing.T) {
 	c := newCollector()
-	ag := newTestManager(Deps{}, c.on)
+	ag := newTestManager(Deps{}, testGate(true), c.on)
 	ag.SetConfig(Config{Target: TargetLocal})
 	ag.Send("查看磁盘使用")
 	c.wait(t)
@@ -251,7 +264,7 @@ func TestLocalTargetRunsOnLocal(t *testing.T) {
 
 func TestRemoteTargetWithoutConnection(t *testing.T) {
 	c := newCollector()
-	ag := newTestManager(Deps{}, c.on)
+	ag := newTestManager(Deps{}, testGate(true), c.on)
 	ag.SetConfig(Config{Target: TargetRemote})
 	ag.Send("查看磁盘使用")
 	c.wait(t)
@@ -273,7 +286,7 @@ func TestRemoteTargetWithoutConnection(t *testing.T) {
 func TestRemoteTargetFallsBackToSerial(t *testing.T) {
 	serial := &stubSerial{open: true}
 	c := newCollector()
-	ag := newTestManager(Deps{Serial: serial}, c.on)
+	ag := newTestManager(Deps{Serial: serial}, testGate(true), c.on)
 	ag.SetConfig(Config{Target: TargetRemote})
 	ag.Send("查看系统版本")
 	c.wait(t)
@@ -288,7 +301,7 @@ func TestAgentLocalInspect(t *testing.T) {
 	serial := &stubSerial{open: true, recent: []byte("user@board:~# ")}
 	ssh := &stubSSH{out: "Linux board 5.15.0"}
 	c := newCollector()
-	ag := newTestManager(Deps{Serial: serial, SSH: ssh}, c.on)
+	ag := newTestManager(Deps{Serial: serial, SSH: ssh}, testGate(true), c.on)
 	ag.Send("巡检设备状态")
 	c.wait(t)
 

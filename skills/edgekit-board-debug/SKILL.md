@@ -171,6 +171,20 @@ function-calling（只读工具自动执行，**修改性工具默认需用户�
 
 ---
 
+## 6.5 MCP 接入（外部 Agent 驱动 EdgeKit）
+
+EdgeKit 也能作为 MCP 工具服务被外部 Agent 调用，工具面与内置 Agent 完全一致：
+
+```bash
+./build/edgekit                                          # 先启动 App
+openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
+openclaw mcp probe edgekit                               # 18 tools
+```
+
+- 传输：stdio（`edgekit mcp`），协议 JSON-RPC 2.0；调用会转发给正在运行的 App
+- 只读工具直接执行；**修改性工具在 App 界面弹出审批**（策略门），拒绝则返回错误文本
+- App 未运行时桥接报错（复用 App 的会话，不自己开串口）
+
 ## 7. WebSocket 协议速查
 
 连接：`ws://127.0.0.1:<port>/ws`（URL 见启动日志）。

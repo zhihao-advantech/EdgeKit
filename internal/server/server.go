@@ -7,6 +7,7 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -24,6 +25,8 @@ import (
 	"edgekit/internal/agent"
 	"edgekit/internal/kit"
 	"edgekit/internal/kits"
+	"edgekit/internal/policy"
+	"edgekit/internal/runtime"
 	"edgekit/internal/serial"
 	"edgekit/internal/sftpx"
 	"edgekit/internal/sshclient"
@@ -69,6 +72,7 @@ type Server struct {
 	agent *agent.Manager
 	deps  kit.Deps
 	kits  *kit.Registry
+	gate  *policy.Gate
 	batch *streamBatcher
 
 	mu       sync.Mutex
@@ -101,7 +105,8 @@ func New() *Server {
 	for _, k := range kits.Builtin(s.deps) {
 		s.kits.Register(k)
 	}
-	s.agent = agent.New(s.kits, s.deps, s.onAgentEvent)
+	s.gate = policy.New(s.onApprovalRequest)
+	s.agent = agent.New(s.kits, s.deps, s.gate, s.onAgentEvent)
 	s.batch = newStreamBatcher(s.emitStream)
 	// Preload the persisted model config so the agent works even when driven
 	// without the UI (e.g. by an external tool over the WebSocket API).
@@ -113,6 +118,7 @@ func New() *Server {
 			AutoRun: settingBool(st, "chk-agent-auto"),
 			Target:  settingString(st, "agent-target"),
 		})
+		s.gate.SetAutoRun(settingBool(st, "chk-agent-auto"))
 	}
 	return s
 }
@@ -355,6 +361,9 @@ func (s *Server) Start(addr string) (string, error) {
 	}
 	s.ln = ln
 	s.url = "ws://" + ln.Addr().String() + "/ws"
+	if err := runtime.Write(runtime.Endpoint{WS: s.url, PID: os.Getpid(), Started: time.Now()}); err != nil {
+		log.Printf("发布运行端点失败: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
@@ -403,6 +412,7 @@ func (s *Server) Close() error {
 		s.closeSession(id)
 	}
 	s.agent.Cancel()
+	runtime.Clear()
 	s.batch.flushAll()
 
 	s.mu.Lock()
@@ -577,6 +587,71 @@ func (s *Server) onAgentEvent(ev agent.Event) {
 	s.broadcast("agent.event", ev)
 }
 
+// onApprovalRequest turns a policy prompt into an agent approval event, which
+// the UI already renders as an approval card.
+func (s *Server) onApprovalRequest(req policy.Request) {
+	s.broadcast("agent.event", agent.Event{
+		Kind:  agent.KindApproval,
+		ID:    req.ID,
+		Tool:  req.Tool,
+		Args:  req.Args,
+		State: "pending",
+		Time:  time.Now(),
+	})
+}
+
+// handleToolsList returns the registry's tool definitions (used by the MCP bridge).
+func (s *Server) handleToolsList(c *client) {
+	tools := s.kits.Tools()
+	out := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, map[string]any{
+			"name":        t.Name,
+			"description": t.Description,
+			"risk":        string(t.Risk),
+			"schema":      t.Schema,
+		})
+	}
+	s.sendTo(c, "tools.defs", map[string]any{"tools": out})
+}
+
+// handleToolCall runs a registry tool on behalf of an external caller (the MCP
+// bridge), after the policy gate has had its say.
+func (s *Server) handleToolCall(c *client, msg message) {
+	var p struct {
+		ID   string         `json:"id"`
+		Name string         `json:"name"`
+		Args map[string]any `json:"args"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	t, ok := s.kits.Tool(p.Name)
+	if !ok {
+		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": "未知工具: " + p.Name})
+		return
+	}
+	argBytes, _ := json.Marshal(p.Args)
+	argText := string(argBytes)
+
+	// Audit: record the request on the focused device's timeline (best effort).
+	s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "action", Data: []byte(p.Name + " " + argText)})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := s.gate.Check(ctx, p.Name, t.Risk, argText); err != nil {
+		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": err.Error()})
+		return
+	}
+	out, err := t.Call(ctx, p.Args)
+	if err != nil {
+		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": err.Error()})
+		return
+	}
+	s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": true, "output": out})
+}
+
 // record appends an observation to the device's timeline.
 func (s *Server) record(id string, r timeline.Record) {
 	if ds := s.session(id); ds != nil && ds.tl != nil {
@@ -714,6 +789,10 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.setFocus(msg.SessionID)
 	case "timeline":
 		s.handleTimeline(c, msg)
+	case "tools.list":
+		s.handleToolsList(c)
+	case "tool.call":
+		s.handleToolCall(c, msg)
 	case "session.close":
 		s.closeSession(msg.SessionID)
 	case "agent.send":
@@ -943,6 +1022,7 @@ func (s *Server) handleAgentConfig(raw json.RawMessage) {
 		return
 	}
 	s.agent.SetConfig(cfg)
+	s.gate.SetAutoRun(cfg.AutoRun)
 	s.broadcast("agent.config", s.agent.Config())
 }
 
@@ -954,7 +1034,7 @@ func (s *Server) handleAgentApprove(raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return
 	}
-	s.agent.Approve(p.ID, p.Allow)
+	s.gate.Approve(p.ID, p.Allow)
 }
 
 /* ------------------------------------------------------------------ *

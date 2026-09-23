@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"edgekit/internal/kit"
+	"edgekit/internal/policy"
 	"edgekit/internal/workspace"
 )
 
@@ -98,24 +99,23 @@ type Manager struct {
 	cfg      Config
 	deps     Deps
 	registry *kit.Registry
+	gate     *policy.Gate
 	history  []chatMessage
-	pending  map[string]chan bool
-	seq      int
 	cancel   context.CancelFunc
 	running  bool
 	onEvent  func(Event)
 }
 
-// New builds an agent manager backed by reg. deps is used to describe the
-// current environment in the system prompt.
-func New(reg *kit.Registry, deps Deps, onEvent func(Event)) *Manager {
+// New builds an agent manager backed by reg. deps describes the current
+// environment for the system prompt; gate decides whether a tool may run.
+func New(reg *kit.Registry, deps Deps, gate *policy.Gate, onEvent func(Event)) *Manager {
 	if reg == nil {
 		reg = kit.NewRegistry()
 	}
 	return &Manager{
 		deps:     deps,
 		registry: reg,
-		pending:  make(map[string]chan bool),
+		gate:     gate,
 		onEvent:  onEvent,
 	}
 }
@@ -149,20 +149,6 @@ func (m *Manager) Cancel() {
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
-	}
-}
-
-// Approve answers a pending approval request.
-func (m *Manager) Approve(id string, allow bool) {
-	m.mu.Lock()
-	ch := m.pending[id]
-	delete(m.pending, id)
-	m.mu.Unlock()
-	if ch != nil {
-		select {
-		case ch <- allow:
-		default:
-		}
 	}
 }
 
@@ -228,19 +214,6 @@ func (m *Manager) snapshot(system string) []chatMessage {
 	return out
 }
 
-func (m *Manager) autoRun() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.cfg.AutoRun
-}
-
-func (m *Manager) nextID() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.seq++
-	return fmt.Sprintf("t%d", m.seq)
-}
-
 // runTool executes a registry tool, asking for approval when required.
 func (m *Manager) runTool(ctx context.Context, name string, args map[string]any, force bool) (string, error) {
 	t, ok := m.registry.Tool(name)
@@ -249,10 +222,10 @@ func (m *Manager) runTool(ctx context.Context, name string, args map[string]any,
 	}
 	argText := marshalArgs(args)
 
-	if t.Mutating() && !force && !m.autoRun() {
-		if !m.requestApproval(ctx, name, argText) {
-			m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: "denied", Result: "用户拒绝执行"})
-			return "用户拒绝执行该操作", nil
+	if !force && m.gate != nil {
+		if err := m.gate.Check(ctx, name, t.Risk, argText); err != nil {
+			m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: "denied", Result: err.Error()})
+			return err.Error(), nil
 		}
 	}
 
@@ -265,31 +238,6 @@ func (m *Manager) runTool(ctx context.Context, name string, args map[string]any,
 	}
 	m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: state, Result: kit.Truncate(out, 4000)})
 	return out, err
-}
-
-func (m *Manager) requestApproval(ctx context.Context, toolName, argText string) bool {
-	id := m.nextID()
-	ch := make(chan bool, 1)
-	m.mu.Lock()
-	m.pending[id] = ch
-	m.mu.Unlock()
-
-	m.emit(Event{Kind: KindApproval, ID: id, Tool: toolName, Args: argText, State: "pending"})
-
-	select {
-	case allow := <-ch:
-		return allow
-	case <-time.After(5 * time.Minute):
-		m.mu.Lock()
-		delete(m.pending, id)
-		m.mu.Unlock()
-		return false
-	case <-ctx.Done():
-		m.mu.Lock()
-		delete(m.pending, id)
-		m.mu.Unlock()
-		return false
-	}
 }
 
 /* ------------------------------------------------------------------ *

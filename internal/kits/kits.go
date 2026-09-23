@@ -27,6 +27,10 @@ func Builtin(deps kit.Deps) []kit.Kit {
 /* ---- JSON Schema helpers ---- */
 
 func obj(props map[string]any, required ...string) map[string]any {
+	if props == nil {
+		// MCP requires inputSchema.properties to be an object, not null.
+		props = map[string]any{}
+	}
 	m := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
 		m["required"] = required
