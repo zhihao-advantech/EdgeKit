@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="128" height="128">
+  <defs>
+    <linearGradient id="ekChip" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9bd8ff"/>
+      <stop offset="1" stop-color="#3f8fe0"/>
+    </linearGradient>
+  </defs>
+  <!-- chip pins -->
+  <g stroke="#79bdf2" stroke-width="1.8" stroke-linecap="round">
+    <path d="M10.5 3.5v3M16 3.5v3M21.5 3.5v3M10.5 25.5v3M16 25.5v3M21.5 25.5v3M3.5 10.5h3M3.5 16h3M3.5 21.5h3M25.5 10.5h3M25.5 16h3M25.5 21.5h3"/>
+  </g>
+  <!-- chip body -->
+  <rect x="6" y="6" width="20" height="20" rx="5.5" fill="url(#ekChip)"/>
+  <!-- AI spark -->
+  <path d="M16 11c.6 3.2 1.8 4.4 5 5-3.2.6-4.4 1.8-5 5-.6-3.2-1.8-4.4-5-5 3.2-.6 4.4-1.8 5-5z" fill="#ffffff"/>
+</svg>
