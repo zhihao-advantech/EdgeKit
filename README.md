@@ -42,6 +42,17 @@ internal/agent/  只消费 kit.Registry，不再硬编码工具
 
 后续阶段：`kit.json` 外置清单、外置 Kit（协议走 MCP）、Kits 管理页。
 
+## 设备模型与时间线
+
+每一次观测/动作都会进入设备的**时间线**（append-only，带序号与时间戳）。它位于 provider 与消费者之间，
+是 UI、内置 Agent 与（后续）MCP 共用的**单一事实源**：
+
+- 位置：`internal/timeline/`
+- API：`Append` / `Since(seq, limit)` / `Wait(ctx, filter, timeout)` / `LastSeq`
+- 宿主为每个设备会话维护一条时间线（上限 5000 条），provider 事件在广播前先落库
+- 用途：**UI 回放**（刷新后恢复滚动内容）、跨通道关联、后续的 `wait_for_output` 与审计
+- 协议：`timeline` 请求 → `timeline.records` 事件（字段 `seq/time/channel/kind/data`）
+
 ## Agent 连板调试
 
 如果要让 Agent（而非人工）用 EdgeKit 做串口 / SSH 连板调试，见
@@ -229,6 +240,7 @@ cmd/edgekit/            程序入口，创建 WebView 并加载本地服务
 internal/serial/        串口管理器（枚举 / 打开 / 读写）
 internal/sshclient/     SSH 终端（连接 / exec / 交互式 Shell）
 internal/sshutil/       SSH 连接参数与拨号（sshclient 与 sftpx 共用）
+internal/timeline/      设备时间线（append-only 记录，UI/Agent/MCP 共用）
 internal/kit/           Kit 扩展模型（Manifest / Tool / Registry / 能力接口）
 internal/kits/          内置 Kit（Host / Network / Serial / SSH / SFTP / Workspace）
 internal/agent/         AI Agent（消费 Registry、Normal 模式、模型调用、审批）

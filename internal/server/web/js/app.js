@@ -395,7 +395,24 @@
 
     state.devices.set(ds.id, ds);
     applyDeviceStatus(ds);
+    // Replay the device's record so a reloaded UI keeps its scrollback.
+    requestTimeline(ds);
     return ds;
+  }
+
+  // The host keeps an append-only timeline per device; ask for the tail of it.
+  function requestTimeline(ds) {
+    send("timeline", { limit: 3000 }, ds.id);
+  }
+
+  function onTimelineRecords(p) {
+    const ds = state.devices.get(p.sessionId);
+    if (!ds || !p.records || !p.records.length) return;
+    if (ds.console.events.length > 0) return; // live content is already there
+    for (const r of p.records) {
+      if (r.channel === "agent") continue;
+      ds.console.push(r.kind || "rx", b64ToBytes(r.data), r.time);
+    }
   }
 
   function removeDeviceSession(id) {
@@ -618,6 +635,7 @@
       case "fs.files": onFSFiles(msg.payload || {}); break;
       case "fs.done": onFSDone(msg.payload || {}); break;
       case "fs.content": onFSContent(msg.payload || {}); break;
+      case "timeline.records": onTimelineRecords(msg.payload || {}); break;
       case "error": onError(msg.payload && msg.payload.message); break;
       default: break;
     }

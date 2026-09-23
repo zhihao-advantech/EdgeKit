@@ -27,6 +27,7 @@ import (
 	"edgekit/internal/serial"
 	"edgekit/internal/sftpx"
 	"edgekit/internal/sshclient"
+	"edgekit/internal/timeline"
 	"edgekit/internal/workspace"
 
 	"github.com/gorilla/websocket"
@@ -57,7 +58,11 @@ type deviceSession struct {
 	serial *serial.Manager    // when kind == "serial"
 	ssh    *sshclient.Manager // when kind == "ssh"
 	sftp   *sftpx.Manager     // when kind == "ssh"
+	tl     *timeline.Timeline // per-device record (the single source of observations)
 }
+
+// timelineMax bounds the per-device record kept in memory.
+const timelineMax = 5000
 
 // Server wires the backends to the browser clients.
 type Server struct {
@@ -534,11 +539,13 @@ func (s *Server) sendError(c *client, err error) {
  * ------------------------------------------------------------------ */
 
 func (s *Server) onSerialEvent(id string, ev serial.Event) {
+	s.record(id, timeline.Record{Channel: timeline.ChannelSerial, Kind: ev.Direction, Time: ev.Time, Data: ev.Data})
 	batchable := ev.Direction == serial.DirRX || ev.Direction == serial.DirTX
 	s.batch.add("serial", id, ev.Direction, ev.Data, ev.Time, batchable)
 }
 
 func (s *Server) onSSHEvent(id string, ev sshclient.Event) {
+	s.record(id, timeline.Record{Channel: timeline.ChannelSSH, Kind: ev.Kind, Time: ev.Time, Data: ev.Data})
 	batchable := ev.Kind == sshclient.KindStdout || ev.Kind == sshclient.KindStderr
 	s.batch.add("ssh", id, ev.Kind, ev.Data, ev.Time, batchable)
 	if ev.Kind == sshclient.KindClosed {
@@ -568,6 +575,32 @@ func (s *Server) emitStream(channel, id, kind string, data []byte, ts time.Time)
 
 func (s *Server) onAgentEvent(ev agent.Event) {
 	s.broadcast("agent.event", ev)
+}
+
+// record appends an observation to the device's timeline.
+func (s *Server) record(id string, r timeline.Record) {
+	if ds := s.session(id); ds != nil && ds.tl != nil {
+		ds.tl.Append(r)
+	}
+}
+
+// handleTimeline replays a device's record to a client (used for UI replay and
+// by the agent for cross-channel correlation).
+func (s *Server) handleTimeline(c *client, msg message) {
+	var p struct {
+		Since uint64 `json:"since"`
+		Limit int    `json:"limit"`
+	}
+	_ = json.Unmarshal(msg.Payload, &p)
+	ds := s.session(msg.SessionID)
+	if ds == nil || ds.tl == nil {
+		s.sendError(c, fmt.Errorf("会话不存在"))
+		return
+	}
+	s.sendTo(c, "timeline.records", map[string]any{
+		"sessionId": ds.id,
+		"records":   ds.tl.Since(p.Since, p.Limit),
+	})
 }
 
 func (s *Server) broadcastSerialStatus(ds *deviceSession) {
@@ -679,6 +712,8 @@ func (s *Server) dispatch(c *client, msg message) {
 		}
 	case "session.focus":
 		s.setFocus(msg.SessionID)
+	case "timeline":
+		s.handleTimeline(c, msg)
 	case "session.close":
 		s.closeSession(msg.SessionID)
 	case "agent.send":
@@ -739,7 +774,7 @@ func (s *Server) handleSerialOpen(c *client, raw json.RawMessage) {
 		return
 	}
 	id := s.nextID("serial")
-	ds := &deviceSession{id: id, kind: "serial", label: path.Base(cfg.Port)}
+	ds := &deviceSession{id: id, kind: "serial", label: path.Base(cfg.Port), tl: timeline.New(timelineMax)}
 	ds.serial = serial.New(func(ev serial.Event) { s.onSerialEvent(id, ev) })
 	if err := ds.serial.Open(cfg); err != nil {
 		s.sendError(c, err)
@@ -798,7 +833,7 @@ func (s *Server) handleSSHConnect(c *client, raw json.RawMessage) {
 	}
 	id := s.nextID("ssh")
 	label := fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port)
-	ds := &deviceSession{id: id, kind: "ssh", label: label}
+	ds := &deviceSession{id: id, kind: "ssh", label: label, tl: timeline.New(timelineMax)}
 	ds.ssh = sshclient.New(func(ev sshclient.Event) { s.onSSHEvent(id, ev) })
 	ds.sftp = sftpx.New(nil)
 
