@@ -79,3 +79,36 @@ func TestRegistryIgnoresDuplicateToolNames(t *testing.T) {
 		t.Fatalf("duplicate kit should not add tools again, got %d", got)
 	}
 }
+
+func TestKitActivation(t *testing.T) {
+	reg := buildRegistry()
+	const all = 18
+	if got := len(reg.Tools()); got != all {
+		t.Fatalf("all kits enabled should expose %d tools, got %d", all, got)
+	}
+	if !reg.SetEnabled("edgekit.kit.ssh", false) {
+		t.Fatal("SetEnabled should find the kit")
+	}
+	if reg.IsEnabled("edgekit.kit.ssh") {
+		t.Fatal("ssh kit should be disabled")
+	}
+	// ssh (2) + sftp (4) remain registered but only ssh is off here
+	if got := len(reg.Tools()); got != all-2 {
+		t.Fatalf("disabled kit should hide its tools, got %d", got)
+	}
+	if _, ok := reg.Tool("ssh_exec"); ok {
+		t.Fatal("a disabled kit's tool must not be executable")
+	}
+	if _, ok := reg.Tool("serial_read"); !ok {
+		t.Fatal("other kits must keep working")
+	}
+	if id, ok := reg.ToolKit("serial_read"); !ok || id != "edgekit.kit.serial" {
+		t.Fatalf("ToolKit = %q, %v", id, ok)
+	}
+	if got := len(reg.KitTools("edgekit.kit.ssh")); got != 2 {
+		t.Fatalf("KitTools(ssh) = %d, want 2", got)
+	}
+	if reg.SetEnabled("nope", true) {
+		t.Fatal("SetEnabled should report unknown kits")
+	}
+}

@@ -324,7 +324,7 @@
       selected: null,
       visible: true,
     },
-    kits: { kits: [], tools: [] },
+    kits: { kits: [] },
     localEcho: false,
     sidebar: true,
     fontScale: 1,
@@ -631,7 +631,11 @@
       case "agent.event": onAgentEvent(msg.payload || {}); break;
       case "agent.config": onAgentConfig(msg.payload || {}); break;
       case "settings": applySettings(msg.payload); break;
-      case "kits": state.kits = msg.payload || { kits: [], tools: [] }; break;
+      case "kits":
+        state.kits = msg.payload || { kits: [] };
+        updateKitsSummary();
+        refreshKitsModal();
+        break;
       case "fs.files": onFSFiles(msg.payload || {}); break;
       case "fs.done": onFSDone(msg.payload || {}); break;
       case "fs.content": onFSContent(msg.payload || {}); break;
@@ -1234,6 +1238,12 @@
       card.className = "msg tool";
       const head = document.createElement("div");
       head.className = "tool-head";
+      if (ev.kit) {
+        const kit = document.createElement("span");
+        kit.className = "tool-kit";
+        kit.textContent = kitLabel(ev.kit);
+        head.append(kit);
+      }
       const name = document.createElement("span");
       name.className = "tool-name";
       name.textContent = ev.tool;
@@ -1391,6 +1401,7 @@
       case "refresh-ports": send("serial.list"); showNewSession("serial"); break;
       case "agent-inspect": agentAsk("巡检设备状态"); break;
       case "agent-logs": agentAsk("查看系统日志"); break;
+      case "kits": showKits(); break;
       case "toggle-sidebar": state.sidebar = !state.sidebar; $("sessions-pane").classList.toggle("hidden", !state.sidebar); break;
       case "toggle-workspace": state.ws.visible = !state.ws.visible; $("workspace").classList.toggle("hidden", !state.ws.visible); $("ws-sides").classList.toggle("hidden", !state.ws.visible); break;
       case "font-inc": setFont(state.fontScale + 0.1); break;
@@ -1494,7 +1505,7 @@
     $("modal-body").innerHTML = html;
     $("modal").classList.add("show");
   }
-  function closeModal() { $("modal").classList.remove("show"); }
+  function closeModal() { kitsModalOpen = false; $("modal").classList.remove("show"); }
   function askText(title, placeholder) {
     return new Promise((resolve) => {
       showModal(title, `<div class="modal-form">
@@ -1546,13 +1557,64 @@
   // Installed kits, contributed by the host (phase-1 Kit manifest plumbing).
   function kitsSection() {
     const kits = state.kits.kits || [];
-    const tools = state.kits.tools || [];
     if (!kits.length) return "";
-    const mutating = tools.filter((t) => t.risk !== "read").length;
+    const total = kits.reduce((n, k) => n + (k.tools ? k.tools.length : 0), 0);
+    const mutating = kits.reduce((n, k) => n + (k.tools || []).filter((t) => t.risk !== "read").length, 0);
+    const enabled = kits.filter((k) => k.enabled).length;
     const items = kits
-      .map((k) => `<li><b>${esc(k.name)}</b> <span class="muted">v${esc(k.version)}${k.license ? " · " + esc(k.license) : ""} — ${esc(k.description || "")}</span></li>`)
+      .map((k) => `<li><b>${esc(k.name)}</b> <span class="muted">v${esc(k.version)}${k.license ? " · " + esc(k.license) : ""}${k.enabled ? "" : " · 已禁用"} — ${esc(k.description || "")}</span></li>`)
       .join("");
-    return `<p class="muted">已加载 ${kits.length} 个 Kit，共 ${tools.length} 个工具（${tools.length - mutating} 只读 / ${mutating} 修改）：</p><ul>${items}</ul>`;
+    return `<p class="muted">已加载 ${kits.length} 个 Kit（启用 ${enabled}），共 ${total} 个工具（${total - mutating} 只读 / ${mutating} 修改）：</p><ul>${items}</ul>`;
+  }
+
+  // Kit id -> display name, for tool attribution.
+  function kitLabel(id) {
+    const k = (state.kits.kits || []).find((x) => x.id === id);
+    return k ? k.name : (id || "").replace("edgekit.kit.", "");
+  }
+
+  function updateKitsSummary() {
+    const kits = state.kits.kits || [];
+    const enabled = kits.filter((k) => k.enabled);
+    const tools = enabled.reduce((n, k) => n + (k.tools ? k.tools.length : 0), 0);
+    $("m-kits").textContent = `${enabled.length}/${kits.length} 个 Kit 启用 · ${tools} 个工具可用`;
+  }
+
+  // ---- Kits management dialog (enable / disable capability packs) ----
+  let kitsModalOpen = false;
+  function showKits() {
+    kitsModalOpen = true;
+    showModal("能力包（Kits）", kitsHTML());
+    wireKitsModal();
+  }
+  function kitsHTML() {
+    const kits = state.kits.kits || [];
+    if (!kits.length) return "<p class=\"muted\">暂无 Kit</p>";
+    const rows = kits.map((k) => {
+      const chips = (k.tools || [])
+        .map((t) => `<span class="kchip ${esc(t.risk)}" title="${esc(t.description || "")}">${esc(t.name)}</span>`)
+        .join("");
+      return `<div class="kit-row">
+        <label class="kit-head">
+          <input type="checkbox" data-kit="${esc(k.id)}" ${k.enabled ? "checked" : ""}>
+          <b>${esc(k.name)}</b>
+          <span class="muted">v${esc(k.version)}${k.license ? " · " + esc(k.license) : ""} · ${(k.tools || []).length} 工具</span>
+        </label>
+        <div class="kinfo muted">${esc(k.description || "")}${k.activation && k.activation.length ? " · 激活: " + esc(k.activation.join(", ")) : ""}</div>
+        <div class="ktools">${chips}</div>
+      </div>`;
+    }).join("");
+    return `<p class="muted">启用 / 禁用能力包；禁用的 Kit 不会向 Agent 与 MCP 暴露工具。</p><div class="kit-list">${rows}</div>`;
+  }
+  function wireKitsModal() {
+    document.querySelectorAll("#modal-body input[data-kit]").forEach((cb) => {
+      cb.addEventListener("change", () => send("kits.setEnabled", { id: cb.dataset.kit, enabled: cb.checked }));
+    });
+  }
+  function refreshKitsModal() {
+    if (!kitsModalOpen) return;
+    $("modal-body").innerHTML = kitsHTML();
+    wireKitsModal();
   }
 
   function showAbout() {
@@ -1666,6 +1728,7 @@
       send("agent.reset");
     });
     $("btn-agent-save").addEventListener("click", saveAgentConfig);
+    $("btn-kits").addEventListener("click", showKits);
     document.querySelectorAll("[data-agent]").forEach((b) => {
       b.addEventListener("click", () => agentAsk(b.dataset.agent));
     });

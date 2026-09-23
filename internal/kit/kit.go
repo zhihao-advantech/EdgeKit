@@ -10,6 +10,7 @@ package kit
 import (
 	"context"
 	"sort"
+	"sync"
 	"time"
 
 	"edgekit/internal/sftpx"
@@ -97,54 +98,144 @@ type Deps struct {
  * registry
  * ------------------------------------------------------------------ */
 
+// entry is a registered kit and whether it is activated.
+type entry struct {
+	kit     Kit
+	enabled bool
+}
+
+type toolEntry struct {
+	tool  Tool
+	kitID string
+}
+
 // Registry aggregates the tools contributed by the activated kits.
+//
+// A kit can be enabled or disabled (like an editor extension): a disabled kit's
+// tools are neither advertised to a brain nor executable, but its manifest is
+// still listed so the UI can offer to turn it back on.
 type Registry struct {
-	kits  []Kit
-	tools map[string]Tool
+	mu    sync.Mutex
+	kits  []*entry
+	tools map[string]toolEntry
 	order []string
 }
 
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
-	return &Registry{tools: make(map[string]Tool)}
+	return &Registry{tools: make(map[string]toolEntry)}
 }
 
-// Register adds a kit's contributions. A tool name already registered by an
-// earlier kit is not overwritten.
+// Register adds a kit's contributions (enabled by default). A tool name already
+// registered by an earlier kit is not overwritten.
 func (r *Registry) Register(k Kit) {
-	r.kits = append(r.kits, k)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.kits = append(r.kits, &entry{kit: k, enabled: true})
+	id := k.Manifest().ID
 	for _, t := range k.Tools() {
 		if _, exists := r.tools[t.Name]; exists {
 			continue
 		}
-		r.tools[t.Name] = t
+		r.tools[t.Name] = toolEntry{tool: t, kitID: id}
 		r.order = append(r.order, t.Name)
 	}
 }
 
-// Tools returns every contributed tool, in registration order.
-func (r *Registry) Tools() []Tool {
-	out := make([]Tool, 0, len(r.order))
-	for _, name := range r.order {
-		out = append(out, r.tools[name])
+// SetEnabled activates or deactivates a kit. It reports whether the kit exists.
+func (r *Registry) SetEnabled(id string, on bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.kits {
+		if e.kit.Manifest().ID == id {
+			e.enabled = on
+			return true
+		}
 	}
-	return out
+	return false
 }
 
-// Tool looks a tool up by name.
+// IsEnabled reports whether a kit is activated.
+func (r *Registry) IsEnabled(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.kits {
+		if e.kit.Manifest().ID == id {
+			return e.enabled
+		}
+	}
+	return false
+}
+
+// ToolKit returns the id of the kit that contributed a tool.
+func (r *Registry) ToolKit(name string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	te, ok := r.tools[name]
+	return te.kitID, ok
+}
+
+// Tools returns the tools of the enabled kits, in registration order.
+func (r *Registry) Tools() []Tool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.toolsLocked()
+}
+
+// Tool looks up an enabled tool by name.
 func (r *Registry) Tool(name string) (Tool, bool) {
-	t, ok := r.tools[name]
-	return t, ok
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	te, ok := r.tools[name]
+	if !ok || !r.enabledLocked(te.kitID) {
+		return Tool{}, false
+	}
+	return te.tool, true
+}
+
+// KitTools returns every tool contributed by one kit (regardless of state).
+func (r *Registry) KitTools(id string) []Tool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []Tool{}
+	for _, name := range r.order {
+		if te := r.tools[name]; te.kitID == id {
+			out = append(out, te.tool)
+		}
+	}
+	return out
 }
 
 // Manifests returns the manifests of the registered kits, sorted by id.
 func (r *Registry) Manifests() []Manifest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	out := make([]Manifest, 0, len(r.kits))
-	for _, k := range r.kits {
-		out = append(out, k.Manifest())
+	for _, e := range r.kits {
+		out = append(out, e.kit.Manifest())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func (r *Registry) toolsLocked() []Tool {
+	out := make([]Tool, 0, len(r.order))
+	for _, name := range r.order {
+		te := r.tools[name]
+		if r.enabledLocked(te.kitID) {
+			out = append(out, te.tool)
+		}
+	}
+	return out
+}
+
+func (r *Registry) enabledLocked(id string) bool {
+	for _, e := range r.kits {
+		if e.kit.Manifest().ID == id {
+			return e.enabled
+		}
+	}
+	return false
 }
 
 /* ------------------------------------------------------------------ *

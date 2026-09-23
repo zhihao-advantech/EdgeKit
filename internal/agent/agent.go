@@ -42,6 +42,7 @@ type Event struct {
 	Kind   string    `json:"kind"`
 	ID     string    `json:"id,omitempty"`
 	Text   string    `json:"text,omitempty"`
+	Kit    string    `json:"kit,omitempty"` // which kit contributed the tool
 	Tool   string    `json:"tool,omitempty"`
 	Args   string    `json:"args,omitempty"`
 	Result string    `json:"result,omitempty"`
@@ -220,23 +221,24 @@ func (m *Manager) runTool(ctx context.Context, name string, args map[string]any,
 	if !ok {
 		return "", fmt.Errorf("未知工具: %s", name)
 	}
+	kitID, _ := m.registry.ToolKit(name)
 	argText := marshalArgs(args)
 
 	if !force && m.gate != nil {
 		if err := m.gate.Check(ctx, name, t.Risk, argText); err != nil {
-			m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: "denied", Result: err.Error()})
+			m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: "denied", Result: err.Error()})
 			return err.Error(), nil
 		}
 	}
 
-	m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: "running"})
+	m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: "running"})
 	out, err := t.Call(ctx, args)
 	state := "ok"
 	if err != nil {
 		state = "error"
 		out = err.Error()
 	}
-	m.emit(Event{Kind: KindTool, Tool: name, Args: argText, State: state, Result: kit.Truncate(out, 4000)})
+	m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: state, Result: kit.Truncate(out, 4000)})
 	return out, err
 }
 

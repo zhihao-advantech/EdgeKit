@@ -119,6 +119,9 @@ func New() *Server {
 			Target:  settingString(st, "agent-target"),
 		})
 		s.gate.SetAutoRun(settingBool(st, "chk-agent-auto"))
+		for _, id := range settingStrings(st, "kits.disabled") {
+			s.kits.SetEnabled(id, false)
+		}
 	}
 	return s
 }
@@ -128,6 +131,21 @@ func settingString(m map[string]any, key string) string {
 		return v
 	}
 	return ""
+}
+
+func settingStrings(m map[string]any, key string) []string {
+	var out []string
+	switch v := m[key].(type) {
+	case []string:
+		out = v
+	case []any:
+		for _, it := range v {
+			if s, ok := it.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 func settingBool(m map[string]any, key string) bool {
@@ -703,16 +721,65 @@ func (s *Server) sendStatus(c *client) {
 	s.sendTo(c, "kits", s.kitsPayload())
 }
 
-// kitsPayload describes the installed kits and their tools to the UI.
+// kitView is one kit as the UI sees it.
+type kitView struct {
+	kit.Manifest
+	Enabled bool       `json:"enabled"`
+	Tools   []toolView `json:"tools"`
+}
+
+// toolView is one contributed tool as the UI sees it.
+type toolView struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Risk        string `json:"risk"`
+}
+
+// kitsPayload describes the installed kits, their activation state and the
+// tools each one contributes.
 func (s *Server) kitsPayload() map[string]any {
-	tools := s.kits.Tools()
-	summary := make([]map[string]any, 0, len(tools))
-	for _, t := range tools {
-		summary = append(summary, map[string]any{
-			"name": t.Name, "risk": string(t.Risk), "description": t.Description,
-		})
+	manifests := s.kits.Manifests()
+	views := make([]kitView, 0, len(manifests))
+	for _, m := range manifests {
+		tools := s.kits.KitTools(m.ID)
+		tv := make([]toolView, 0, len(tools))
+		for _, t := range tools {
+			tv = append(tv, toolView{Name: t.Name, Description: t.Description, Risk: string(t.Risk)})
+		}
+		views = append(views, kitView{Manifest: m, Enabled: s.kits.IsEnabled(m.ID), Tools: tv})
 	}
-	return map[string]any{"kits": s.kits.Manifests(), "tools": summary}
+	return map[string]any{"kits": views}
+}
+
+// handleKitsSetEnabled activates or deactivates a kit and persists the choice.
+func (s *Server) handleKitsSetEnabled(c *client, msg message) {
+	var p struct {
+		ID      string `json:"id"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	if !s.kits.SetEnabled(p.ID, p.Enabled) {
+		s.sendError(c, fmt.Errorf("未知 Kit: %s", p.ID))
+		return
+	}
+	s.persistKits()
+	s.broadcast("kits", s.kitsPayload())
+}
+
+// persistKits remembers which kits are disabled.
+func (s *Server) persistKits() {
+	st := loadSettings()
+	disabled := []string{}
+	for _, m := range s.kits.Manifests() {
+		if !s.kits.IsEnabled(m.ID) {
+			disabled = append(disabled, m.ID)
+		}
+	}
+	st["kits.disabled"] = disabled
+	_ = saveSettings(st)
 }
 
 /* ------------------------------------------------------------------ *
@@ -789,6 +856,8 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.setFocus(msg.SessionID)
 	case "timeline":
 		s.handleTimeline(c, msg)
+	case "kits.setEnabled":
+		s.handleKitsSetEnabled(c, msg)
 	case "tools.list":
 		s.handleToolsList(c)
 	case "tool.call":

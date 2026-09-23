@@ -461,6 +461,26 @@ select { cursor: pointer; }
 #new-kind { margin-bottom: 12px; }
 #new-serial-form, #new-ssh-form { margin-bottom: 14px; }
 
+
+/* ----------------------------- Kits 管理 ----------------------------- */
+.kit-list { display: flex; flex-direction: column; gap: 10px; }
+.kit-row { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--panel); }
+.kit-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.kit-head input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--accent); }
+.kit-head .muted { font-size: 11px; }
+.kinfo { font-size: 11.5px; margin: 4px 0 6px; }
+.ktools { display: flex; flex-wrap: wrap; gap: 4px; }
+.kchip {
+  font-family: var(--mono); font-size: 10.5px;
+  padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--ink-dim);
+}
+.kchip.mutate { color: #a9691a; border-color: #e5c99a; background: #fdf6e9; }
+.kchip.dangerous { color: #b7332a; border-color: #f3c6c2; background: #fdecec; }
+.tool-kit { color: var(--ink-faint); margin-right: 6px; }
+.tool-kit::after { content: "·"; margin-left: 6px; }
+button#btn-kits { margin-bottom: 0; }
+
 /* ----------------------------- 模态框 ----------------------------- */
 .modal {
   position: fixed; inset: 0;

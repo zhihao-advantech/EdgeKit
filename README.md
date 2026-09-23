@@ -42,6 +42,21 @@ internal/agent/  只消费 kit.Registry，不再硬编码工具
 
 后续阶段：`kit.json` 外置清单、外置 Kit（协议走 MCP）、Kits 管理页。
 
+## Agent + Kit
+
+EdgeKit 的形态是 **Agent（编排/对话层）+ Kit（能力包）**，与 VS Code 扩展、
+TRAE 的自定义 Agent 工具开关、WorkBuddy 的 Connectors 同构：
+
+- **Kit**：能力包，声明 `Manifest`（`id` / `version` / `license` / `runtime` / `activation`）
+  与一组带风险等级的 `Tool`（`read` / `mutate` / `dangerous`）
+- **Agent**：消费 Kit 的 `Tool`，本身不定义工具；大脑可内置（Normal 宏 / OpenAI 兼容）
+  或外置（MCP → OpenClaw）
+- **启用/禁用**：「工具 → Kits 管理…」或 Agent 面板的「Kits 管理…」
+  - 禁用的 Kit **不向 Agent 与 MCP 暴露工具，也无法执行**（调用返回「未知工具」）
+  - 面板展示每个 Kit 的版本、许可证、激活事件、以及工具与风险等级
+  - 选择持久化到 `~/.config/edgekit/settings.json` 的 `kits.disabled`
+- **归属可见**：对话中的工具卡片标明来自哪个 Kit（如 `Serial · serial_read`）
+
 ## 设备模型与时间线
 
 每一次观测/动作都会进入设备的**时间线**（append-only，带序号与时间戳）。它位于 provider 与消费者之间，
