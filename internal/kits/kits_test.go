@@ -16,11 +16,11 @@ func buildRegistry() *kit.Registry {
 
 func TestBuiltinKitsContributeTools(t *testing.T) {
 	reg := buildRegistry()
-	if got := len(reg.Tools()); got != 18 {
-		t.Fatalf("expected 18 tools from the built-in kits, got %d", got)
+	if got := len(reg.Tools()); got != 20 {
+		t.Fatalf("expected 20 tools from the built-in kits, got %d", got)
 	}
-	if got := len(reg.Manifests()); got != 6 {
-		t.Fatalf("expected 6 kits, got %d", got)
+	if got := len(reg.Manifests()); got != 7 {
+		t.Fatalf("expected 7 kits, got %d", got)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestManifestsAreWellFormed(t *testing.T) {
 
 func TestToolRiskClassification(t *testing.T) {
 	reg := buildRegistry()
-	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "sftp_download", "workspace_write"}
+	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "sftp_download", "workspace_write", "code_patch"}
 	for _, name := range mutating {
 		tool, ok := reg.Tool(name)
 		if !ok {
@@ -56,7 +56,7 @@ func TestToolRiskClassification(t *testing.T) {
 	}
 	readOnly := []string{"local_info", "net_ping", "net_check_port", "net_resolve",
 		"serial_status", "serial_read", "ssh_status", "sftp_status", "sftp_list",
-		"workspace_list", "workspace_read"}
+		"workspace_list", "workspace_read", "code_diff"}
 	for _, name := range readOnly {
 		tool, ok := reg.Tool(name)
 		if !ok {
@@ -82,7 +82,7 @@ func TestRegistryIgnoresDuplicateToolNames(t *testing.T) {
 
 func TestKitActivation(t *testing.T) {
 	reg := buildRegistry()
-	const all = 18
+	const all = 20
 	if got := len(reg.Tools()); got != all {
 		t.Fatalf("all kits enabled should expose %d tools, got %d", all, got)
 	}

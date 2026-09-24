@@ -1501,14 +1501,58 @@
   function appendApproval(ev) {
     const card = document.createElement("div");
     card.className = "msg approval";
-    const text = document.createElement("div");
-    text.className = "approval-text";
-    text.textContent = `Agent 请求执行修改性操作：${ev.tool} ${ev.args || ""}`;
+
+    let meta = null;
+    if (ev.tool === "code_patch" && ev.args) {
+      try { meta = JSON.parse(ev.args); } catch (_) { /* fall back */ }
+    }
+
+    if (meta) {
+      card.classList.add("experiment");
+      const head = document.createElement("div");
+      head.className = "exp-head";
+      head.textContent = "实验";
+      const hypothesis = document.createElement("div");
+      hypothesis.className = "exp-hyp";
+      hypothesis.textContent = "假设：" + (meta.hypothesis || "（未提供）");
+      const pathEl = document.createElement("div");
+      pathEl.className = "exp-path";
+      pathEl.textContent = "改动：" + (meta.path || "");
+      card.append(head, hypothesis, pathEl);
+
+      const diffText = meta.diff || workspace.DiffPreview(meta);
+      if (diffText) {
+        const pre = document.createElement("pre");
+        pre.className = "diff";
+        diffText.split("\n").forEach((line) => {
+          const span = document.createElement("span");
+          if (line.startsWith("+")) span.className = "diff-add";
+          else if (line.startsWith("-")) span.className = "diff-del";
+          else span.className = "diff-ctx";
+          span.textContent = line + "\n";
+          pre.appendChild(span);
+        });
+        card.appendChild(pre);
+      }
+
+      if (meta.verify) {
+        const v = document.createElement("div");
+        v.className = "exp-verify";
+        v.textContent = "验证：" + meta.verify;
+        card.appendChild(v);
+      }
+    } else {
+      const text = document.createElement("div");
+      text.className = "approval-text";
+      text.textContent = `Agent 请求执行修改性操作：${ev.tool} ${ev.args || ""}`;
+      card.appendChild(text);
+    }
+
     const actions = document.createElement("div");
     actions.className = "approval-actions";
     const allow = document.createElement("button");
     allow.className = "btn primary";
-    allow.textContent = "允许执行";
+    allow.textContent = "批准";
     const deny = document.createElement("button");
     deny.className = "btn";
     deny.textContent = "拒绝";
@@ -1522,11 +1566,19 @@
     allow.addEventListener("click", () => { send("agent.approve", { id: ev.id, allow: true }); finish(); });
     deny.addEventListener("click", () => { send("agent.approve", { id: ev.id, allow: false }); finish(); });
     actions.append(allow, deny);
-    card.append(text, actions);
+    card.append(actions);
     const chat = $("agent-chat");
     chat.appendChild(card);
     chat.scrollTop = chat.scrollHeight;
   }
+
+  // DiffPreview is a placeholder for a future client-side diff; when the agent
+  // does not supply a diff, we show the proposed content instead.
+  const workspace = {
+    DiffPreview(meta) {
+      return meta.content ? "  (新内容 " + meta.content.length + " 字节)" : "";
+    },
+  };
 
   /* ------------------------------------------------------------------ *
    * menus / toolbar

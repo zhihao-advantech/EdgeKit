@@ -196,3 +196,59 @@ func Read(rel string) ([]byte, error) {
 	}
 	return data, nil
 }
+
+// SimpleDiff computes a unified-diff-style string from two text blocks. It
+// finds the common prefix and suffix and shows the changed middle with -/+
+// markers, with up to 3 lines of unchanged context on each side.
+func SimpleDiff(oldText, newText string) string {
+	oldLines := strings.Split(oldText, "\n")
+	newLines := strings.Split(newText, "\n")
+
+	prefix := 0
+	for prefix < len(oldLines) && prefix < len(newLines) && oldLines[prefix] == newLines[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(oldLines)-prefix && suffix < len(newLines)-prefix &&
+		oldLines[len(oldLines)-1-suffix] == newLines[len(newLines)-1-suffix] {
+		suffix++
+	}
+
+	if prefix == len(oldLines)-suffix && prefix == len(newLines)-suffix {
+		return "" // identical
+	}
+
+	var sb strings.Builder
+	ctxStart := prefix - 3
+	if ctxStart < 0 {
+		ctxStart = 0
+	}
+	for i := ctxStart; i < prefix; i++ {
+		sb.WriteString(" " + oldLines[i] + "\n")
+	}
+	for i := prefix; i < len(oldLines)-suffix; i++ {
+		sb.WriteString("-" + oldLines[i] + "\n")
+	}
+	for i := prefix; i < len(newLines)-suffix; i++ {
+		sb.WriteString("+" + newLines[i] + "\n")
+	}
+	oldEnd := len(oldLines) - suffix
+	ctxEnd := oldEnd + 3
+	if ctxEnd > len(oldLines) {
+		ctxEnd = len(oldLines)
+	}
+	for i := oldEnd; i < ctxEnd; i++ {
+		sb.WriteString(" " + oldLines[i] + "\n")
+	}
+	return sb.String()
+}
+
+// ApplyPatch writes content to a workspace file and returns the diff between
+// the old and new content.
+func ApplyPatch(rel string, content string) (string, error) {
+	oldContent, _ := Read(rel)
+	if _, err := Write(rel, []byte(content)); err != nil {
+		return "", err
+	}
+	return SimpleDiff(string(oldContent), content), nil
+}

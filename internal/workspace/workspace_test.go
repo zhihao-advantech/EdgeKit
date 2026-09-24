@@ -26,6 +26,35 @@ func TestResolveStaysInRoot(t *testing.T) {
 	}
 }
 
+func TestSimpleDiff(t *testing.T) {
+	got := SimpleDiff("line1\nline2\nline3", "line1\nchanged\nline3")
+	want := " line1\n-line2\n+changed\n line3"
+	if strings.TrimSpace(got) != strings.TrimSpace(want) {
+		t.Fatalf("SimpleDiff = %q, want %q", got, want)
+	}
+	if got := SimpleDiff("same", "same"); strings.TrimSpace(got) != "" {
+		t.Fatalf("identical text should produce empty diff, got %q", got)
+	}
+}
+
+func TestApplyPatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := Write("mod.txt", []byte("old content")); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := ApplyPatch("mod.txt", "new content")
+	if err != nil {
+		t.Fatalf("ApplyPatch: %v", err)
+	}
+	if !strings.Contains(diff, "-old content") || !strings.Contains(diff, "+new content") {
+		t.Fatalf("diff should show the change, got %q", diff)
+	}
+	data, err := Read("mod.txt")
+	if err != nil || string(data) != "new content" {
+		t.Fatalf("file should be updated, got %q", data)
+	}
+}
+
 func TestResolveRejectsSymlinkEscape(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
