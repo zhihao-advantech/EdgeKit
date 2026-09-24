@@ -55,6 +55,48 @@ func TestApplyPatch(t *testing.T) {
 	}
 }
 
+func TestApplyPatchSavesBackup(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := Write("src/mod.txt", []byte("original")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyPatch("src/mod.txt", "modified"); err != nil {
+		t.Fatalf("ApplyPatch: %v", err)
+	}
+	backup, err := Read(".backup/src/mod.txt")
+	if err != nil || string(backup) != "original" {
+		t.Fatalf("backup = %q, err %v", backup, err)
+	}
+}
+
+func TestRevertRestoresBackup(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := Write("revert.txt", []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyPatch("revert.txt", "after"); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := Revert("revert.txt")
+	if err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if !strings.Contains(msg, "已回退") {
+		t.Fatalf("unexpected revert message: %q", msg)
+	}
+	data, _ := Read("revert.txt")
+	if string(data) != "before" {
+		t.Fatalf("after revert = %q, want before", data)
+	}
+}
+
+func TestRevertNoBackup(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := Revert("never-backed-up.txt"); err == nil {
+		t.Fatal("revert without backup should fail")
+	}
+}
+
 func TestResolveRejectsSymlinkEscape(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

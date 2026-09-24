@@ -244,11 +244,36 @@ func SimpleDiff(oldText, newText string) string {
 }
 
 // ApplyPatch writes content to a workspace file and returns the diff between
-// the old and new content.
+// the old and new content. A backup of the old content is saved first.
 func ApplyPatch(rel string, content string) (string, error) {
 	oldContent, _ := Read(rel)
+	Backup(rel)
 	if _, err := Write(rel, []byte(content)); err != nil {
 		return "", err
 	}
 	return SimpleDiff(string(oldContent), content), nil
+}
+
+// Backup saves the current content of a workspace file to .backup/<rel> so the
+// change can be reverted. It is a no-op when the file does not exist yet.
+func Backup(rel string) error {
+	oldContent, err := Read(rel)
+	if err != nil {
+		return nil
+	}
+	_, err = Write(".backup/"+rel, oldContent)
+	return err
+}
+
+// Revert restores a workspace file from its .backup/<rel> copy.
+func Revert(rel string) (string, error) {
+	backupPath := ".backup/" + rel
+	backupContent, err := Read(backupPath)
+	if err != nil {
+		return "", fmt.Errorf("备份不存在: %s", backupPath)
+	}
+	if _, err := Write(rel, backupContent); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已回退 %s 到备份", rel), nil
 }

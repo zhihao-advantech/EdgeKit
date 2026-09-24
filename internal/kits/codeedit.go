@@ -146,5 +146,20 @@ func (k codeEditKit) Tools() []kit.Tool {
 					exitCode, duration.Round(time.Millisecond), out), nil
 			},
 		},
+		{
+			Name:        "code_revert",
+			Description: "回退文件到写入前的备份（.backup/ 目录）",
+			Risk:        kit.RiskMutate,
+			Schema: obj(map[string]any{
+				"path": strType(),
+			}, "path"),
+			Call: func(ctx context.Context, args map[string]any) (string, error) {
+				path := argString(args, "path")
+				if path == "" {
+					return "", fmt.Errorf("path 不能为空")
+				}
+				return workspace.Revert(path)
+			},
+		},
 	}
 }
