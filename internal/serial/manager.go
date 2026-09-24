@@ -59,7 +59,8 @@ type Manager struct {
 	open      bool
 	done      chan struct{}
 	recent    []byte
-	capturing bool
+	rxTotal   uint64
+	capturing int
 	onEvent   func(Event)
 
 	// writeMu serializes port writes so the state lock is never held across a
@@ -131,6 +132,8 @@ func (m *Manager) Open(cfg Config) error {
 	m.cfg = cfg
 	m.open = true
 	m.recent = nil
+	m.rxTotal = 0
+	m.capturing = 0
 	m.done = make(chan struct{})
 	done := m.done
 	m.mu.Unlock()
@@ -205,12 +208,22 @@ func (m *Manager) Recent() []byte {
 func (m *Manager) isCapturing() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.capturing
+	return m.capturing > 0
 }
 
-func (m *Manager) setCapturing(v bool) {
+// beginCapture/endCapture count nested silent captures so concurrent captures
+// keep the command traffic out of the terminal until the last one finishes.
+func (m *Manager) beginCapture() {
 	m.mu.Lock()
-	m.capturing = v
+	m.capturing++
+	m.mu.Unlock()
+}
+
+func (m *Manager) endCapture() {
+	m.mu.Lock()
+	if m.capturing > 0 {
+		m.capturing--
+	}
 	m.mu.Unlock()
 }
 
@@ -233,11 +246,33 @@ func (m *Manager) writeRaw(p []byte) error {
 func (m *Manager) appendRecent(p []byte) {
 	m.mu.Lock()
 	m.recent = append(m.recent, p...)
+	m.rxTotal += uint64(len(p))
 	if len(m.recent) > recentMax {
 		n := copy(m.recent, m.recent[len(m.recent)-recentMax:])
 		m.recent = m.recent[:n]
 	}
 	m.mu.Unlock()
+}
+
+// captureFrom returns the bytes received since the given cumulative offset,
+// bounded by what the ring still holds. Unlike slicing by len(recent), this is
+// correct once the ring has reached recentMax and stops growing.
+func (m *Manager) captureFrom(start uint64) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.rxTotal < start {
+		return ""
+	}
+	want := int(m.rxTotal - start)
+	if want > len(m.recent) {
+		want = len(m.recent)
+	}
+	if want <= 0 {
+		return ""
+	}
+	out := make([]byte, want)
+	copy(out, m.recent[len(m.recent)-want:])
+	return strings.ToValidUTF8(string(out), "\uFFFD")
 }
 
 // IsOpen reports whether a port is currently open.

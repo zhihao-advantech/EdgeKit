@@ -26,6 +26,33 @@ func TestResolveStaysInRoot(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsSymlinkEscape(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	root, err := Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if _, err := Resolve("link/secret.txt"); err == nil {
+		t.Fatal("a symlink escaping the workspace should be rejected")
+	}
+}
+
+func TestWriteCreatesParentDirs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if _, err := Write("a/b/c/file.txt", []byte("x")); err != nil {
+		t.Fatalf("write nested: %v", err)
+	}
+	if data, err := Read("a/b/c/file.txt"); err != nil || string(data) != "x" {
+		t.Fatalf("read nested: %v %q", err, data)
+	}
+}
+
 func TestWorkspaceRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

@@ -45,7 +45,39 @@ func Resolve(rel string) (string, error) {
 	if abs != root && !strings.HasPrefix(abs, root+string(os.PathSeparator)) {
 		return "", fmt.Errorf("路径越界")
 	}
+	if err := checkWithinRoot(root, abs); err != nil {
+		return "", err
+	}
 	return abs, nil
+}
+
+// checkWithinRoot resolves symlinks on the deepest existing ancestor of abs and
+// verifies the real path is still inside root, so a symlink planted in the
+// workspace cannot be used to read or write outside the sandbox.
+func checkWithinRoot(root, abs string) error {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("解析工作区失败: %w", err)
+	}
+	probe := abs
+	for {
+		if _, err := os.Lstat(probe); err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break
+		}
+		probe = parent
+	}
+	real, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		return fmt.Errorf("解析路径失败: %w", err)
+	}
+	if real != realRoot && !strings.HasPrefix(real, realRoot+string(os.PathSeparator)) {
+		return fmt.Errorf("路径越界")
+	}
+	return nil
 }
 
 // Display returns the absolute path for the UI.
@@ -107,6 +139,9 @@ func NewFile(rel string) error {
 	if _, err := os.Stat(abs); err == nil {
 		return fmt.Errorf("文件已存在: %s", rel)
 	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return fmt.Errorf("创建目录失败: %w", err)
+	}
 	f, err := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("创建文件失败: %w", err)
@@ -119,6 +154,10 @@ func Write(rel string, data []byte) (string, error) {
 	abs, err := Resolve(rel)
 	if err != nil {
 		return "", err
+	}
+	// Create the parent directory so nested paths work.
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return "", fmt.Errorf("创建目录失败: %w", err)
 	}
 	if err := os.WriteFile(abs, data, 0o644); err != nil {
 		return "", fmt.Errorf("写入文件失败: %w", err)

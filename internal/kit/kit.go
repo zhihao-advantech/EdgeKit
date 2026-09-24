@@ -9,6 +9,7 @@ package kit
 
 import (
 	"context"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -134,7 +135,8 @@ func (r *Registry) Register(k Kit) {
 	r.kits = append(r.kits, &entry{kit: k, enabled: true})
 	id := k.Manifest().ID
 	for _, t := range k.Tools() {
-		if _, exists := r.tools[t.Name]; exists {
+		if prev, exists := r.tools[t.Name]; exists {
+			log.Printf("kit %s: tool %q already provided by %s, ignoring", id, t.Name, prev.kitID)
 			continue
 		}
 		r.tools[t.Name] = toolEntry{tool: t, kitID: id}

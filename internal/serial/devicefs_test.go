@@ -1,6 +1,30 @@
 package serial
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
+
+// TestCaptureFromSaturatedRing guards the regression where a full receive ring
+// stopped growing len(recent), so a len-based slice returned nothing.
+func TestCaptureFromSaturatedRing(t *testing.T) {
+	m := &Manager{}
+	m.recent = bytes.Repeat([]byte("a"), recentMax)
+	m.rxTotal = 1000
+	// Four new bytes arrived during a capture and sit at the tail of the ring.
+	copy(m.recent[len(m.recent)-4:], []byte("XYZ\n"))
+	m.rxTotal = 1004
+
+	if got := m.captureFrom(1000); got != "XYZ\n" {
+		t.Fatalf("captureFrom(1000) = %q, want %q", got, "XYZ\n")
+	}
+	if got := m.captureFrom(1004); got != "" {
+		t.Fatalf("captureFrom(1004) = %q, want empty", got)
+	}
+	if got := m.captureFrom(0); len(got) != 1004 {
+		t.Fatalf("captureFrom(0) len = %d, want 1004", len(got))
+	}
+}
 
 func TestParseLS(t *testing.T) {
 	out := "ls -la /\r\n" +

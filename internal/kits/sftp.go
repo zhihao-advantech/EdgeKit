@@ -66,7 +66,7 @@ func (k sftpKit) Tools() []kit.Tool {
 		{
 			Name:        "sftp_download",
 			Description: "把远端文件下载到本地工作区，返回本地路径",
-			Risk:        kit.RiskRead,
+			Risk:        kit.RiskMutate,
 			Schema:      obj(map[string]any{"path": strType()}, "path"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsConnected() {

@@ -44,7 +44,7 @@ func TestManifestsAreWellFormed(t *testing.T) {
 
 func TestToolRiskClassification(t *testing.T) {
 	reg := buildRegistry()
-	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "workspace_write"}
+	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "sftp_download", "workspace_write"}
 	for _, name := range mutating {
 		tool, ok := reg.Tool(name)
 		if !ok {
@@ -56,7 +56,7 @@ func TestToolRiskClassification(t *testing.T) {
 	}
 	readOnly := []string{"local_info", "net_ping", "net_check_port", "net_resolve",
 		"serial_status", "serial_read", "ssh_status", "sftp_status", "sftp_list",
-		"sftp_download", "workspace_list", "workspace_read"}
+		"workspace_list", "workspace_read"}
 	for _, name := range readOnly {
 		tool, ok := reg.Tool(name)
 		if !ok {

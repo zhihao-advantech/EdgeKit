@@ -19,6 +19,30 @@ import (
 // MaxTransfer bounds a single upload/download to keep the payload sane.
 const MaxTransfer = 16 << 20 // 16 MiB
 
+// opTimeout bounds one remote operation so a stalled server cannot block the
+// caller indefinitely. The in-flight call may still finish in the background;
+// the SFTP client is safe for concurrent use.
+const opTimeout = 30 * time.Second
+
+func withTimeout[T any](op func() (T, error)) (T, error) {
+	type result struct {
+		v   T
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		v, err := op()
+		ch <- result{v, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.v, r.err
+	case <-time.After(opTimeout):
+		var zero T
+		return zero, fmt.Errorf("SFTP 操作超时（>%s）", opTimeout)
+	}
+}
+
 // Entry describes one remote directory entry.
 type Entry struct {
 	Name    string    `json:"name"`
@@ -117,27 +141,29 @@ func (m *Manager) List(path string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	infos, err := sc.ReadDir(normalize(path))
-	if err != nil {
-		return nil, fmt.Errorf("读取目录失败: %w", err)
-	}
-	entries := make([]Entry, 0, len(infos))
-	for _, info := range infos {
-		entries = append(entries, Entry{
-			Name:    info.Name(),
-			Size:    info.Size(),
-			Mode:    info.Mode().String(),
-			ModTime: info.ModTime(),
-			IsDir:   info.IsDir(),
-		})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].IsDir != entries[j].IsDir {
-			return entries[i].IsDir
+	return withTimeout(func() ([]Entry, error) {
+		infos, err := sc.ReadDir(normalize(path))
+		if err != nil {
+			return nil, fmt.Errorf("读取目录失败: %w", err)
 		}
-		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+		entries := make([]Entry, 0, len(infos))
+		for _, info := range infos {
+			entries = append(entries, Entry{
+				Name:    info.Name(),
+				Size:    info.Size(),
+				Mode:    info.Mode().String(),
+				ModTime: info.ModTime(),
+				IsDir:   info.IsDir(),
+			})
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].IsDir != entries[j].IsDir {
+				return entries[i].IsDir
+			}
+			return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+		})
+		return entries, nil
 	})
-	return entries, nil
 }
 
 // Mkdir creates a remote directory (and parents).
@@ -225,20 +251,22 @@ func (m *Manager) Download(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := sc.Open(normalize(path))
-	if err != nil {
-		return nil, fmt.Errorf("打开文件失败: %w", err)
-	}
-	defer f.Close()
+	return withTimeout(func() ([]byte, error) {
+		f, err := sc.Open(normalize(path))
+		if err != nil {
+			return nil, fmt.Errorf("打开文件失败: %w", err)
+		}
+		defer f.Close()
 
-	data, err := io.ReadAll(io.LimitReader(f, MaxTransfer+1))
-	if err != nil {
-		return nil, fmt.Errorf("读取文件失败: %w", err)
-	}
-	if len(data) > MaxTransfer {
-		return nil, fmt.Errorf("文件超过 %d MiB 上限", MaxTransfer>>20)
-	}
-	return data, nil
+		data, err := io.ReadAll(io.LimitReader(f, MaxTransfer+1))
+		if err != nil {
+			return nil, fmt.Errorf("读取文件失败: %w", err)
+		}
+		if len(data) > MaxTransfer {
+			return nil, fmt.Errorf("文件超过 %d MiB 上限", MaxTransfer>>20)
+		}
+		return data, nil
+	})
 }
 
 // Upload writes data to a remote file, creating or truncating it.
@@ -249,15 +277,18 @@ func (m *Manager) Upload(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	f, err := sc.Create(normalize(path))
-	if err != nil {
-		return fmt.Errorf("创建文件失败: %w", err)
-	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("写入文件失败: %w", err)
-	}
-	return nil
+	_, err = withTimeout(func() (bool, error) {
+		f, err := sc.Create(normalize(path))
+		if err != nil {
+			return false, fmt.Errorf("创建文件失败: %w", err)
+		}
+		defer f.Close()
+		if _, err := f.Write(data); err != nil {
+			return false, fmt.Errorf("写入文件失败: %w", err)
+		}
+		return true, nil
+	})
+	return err
 }
 
 func (m *Manager) session() (*sftp.Client, error) {

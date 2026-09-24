@@ -317,8 +317,12 @@ func (m *Manager) HasShell() bool {
 	return m.shell
 }
 
+// execTimeout bounds a one-shot command so a hung remote does not block forever.
+const execTimeout = 60 * time.Second
+
 // ExecCapture runs a command on a dedicated session and returns its combined
-// output (bounded by maxBytes). An interactive shell session is unaffected.
+// output (bounded by maxBytes). An interactive shell session is unaffected. The
+// command is aborted if it runs longer than execTimeout.
 func (m *Manager) ExecCapture(command string, maxBytes int) (string, error) {
 	m.mu.Lock()
 	if !m.connected || m.client == nil {
@@ -340,7 +344,18 @@ func (m *Manager) ExecCapture(command string, maxBytes int) (string, error) {
 	buf := &limitedBuffer{max: maxBytes}
 	session.Stdout = buf
 	session.Stderr = buf
-	runErr := session.Run(command)
+
+	done := make(chan error, 1)
+	go func() { done <- session.Run(command) }()
+
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-time.After(execTimeout):
+		_ = session.Close() // unblock Run
+		return "", fmt.Errorf("命令执行超时（>%s）", execTimeout)
+	}
+
 	out := buf.String()
 	if runErr != nil {
 		if out == "" {

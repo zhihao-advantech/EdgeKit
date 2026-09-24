@@ -37,12 +37,12 @@ func (m *Manager) runCapture(command string, quiet, timeout time.Duration, silen
 		return "", fmt.Errorf("串口未打开")
 	}
 	if silent {
-		m.setCapturing(true)
-		defer m.setCapturing(false)
+		m.beginCapture()
+		defer m.endCapture()
 	}
 
 	m.mu.Lock()
-	start := len(m.recent)
+	start := m.rxTotal
 	m.mu.Unlock()
 
 	if silent {
@@ -54,29 +54,21 @@ func (m *Manager) runCapture(command string, quiet, timeout time.Duration, silen
 	}
 
 	deadline := time.Now().Add(timeout)
-	lastLen := start
+	last := start
 	lastChange := time.Now()
 	for time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 		m.mu.Lock()
-		n := len(m.recent)
+		n := m.rxTotal
 		m.mu.Unlock()
-		if n != lastLen {
-			lastLen = n
+		if n != last {
+			last = n
 			lastChange = time.Now()
 		} else if time.Since(lastChange) >= quiet {
 			break
 		}
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if start > len(m.recent) {
-		start = 0 // ring buffer wrapped past the mark
-	}
-	out := make([]byte, len(m.recent)-start)
-	copy(out, m.recent[start:])
-	return strings.ToValidUTF8(string(out), "\uFFFD"), nil
+	return m.captureFrom(start), nil
 }
 
 // lsLineRe matches a long-format listing line:
