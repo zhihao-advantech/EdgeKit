@@ -162,6 +162,7 @@ body {
 .s-ico svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
 .s-ico.serial { background: #fdf1dc; color: #b9791d; }
 .s-ico.ssh { background: var(--accent-soft); color: var(--accent-2); }
+.s-ico.desktop { background: #e7e0fb; color: #6d4bd0; }
 .s-ico.net { background: #e2eefb; color: #2f6fb0; }
 .s-ico.sftp { background: #efe7fb; color: #7a4fd0; }
 .s-ico.agent { background: linear-gradient(135deg, #efe9ff, #e2f0ff); color: #6b4fd0; }
@@ -254,6 +255,7 @@ select { cursor: pointer; }
 .tab-accent.net { background: var(--blue); }
 .tab-accent.sftp { background: var(--purple); }
 .tab-accent.agent { background: #8b5cf6; }
+.tab-accent.desktop { background: #6d4bd0; }
 .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-x { width: 15px; height: 15px; display: grid; place-items: center; border-radius: 3px; color: var(--ink-faint); font-size: 14px; line-height: 1; }
 .tab-x:hover { background: #d9534f; color: #fff; }
@@ -289,6 +291,16 @@ select { cursor: pointer; }
   cursor: text;
 }
 .output .line { display: block; }
+
+/* remote desktop (noVNC canvas) */
+.desktop-wrap { position: relative; flex: 1; min-height: 0; background: #000; overflow: hidden; }
+.desktop-wrap canvas { display: block; margin: 0 auto; }
+.desktop-msg {
+  position: absolute; inset: 0; display: none;
+  align-items: center; justify-content: center;
+  color: var(--term-faint); font-size: 13px; background: rgba(0, 0, 0, 0.35);
+}
+.desktop-msg.show { display: flex; }
 
 /* block cursor, terminal style */
 .term-cursor {

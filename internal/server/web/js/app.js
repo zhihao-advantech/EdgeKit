@@ -349,6 +349,7 @@
   const ICON = {
     serial: '<svg viewBox="0 0 16 16"><path d="M6 1.5v3M10 1.5v3M4.5 4.5h7v3.5a3.5 3.5 0 0 1-7 0zM8 11.5V14"/></svg>',
     ssh: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 6l2 2-2 2M8 10h4"/></svg>',
+    desktop: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1.5"/><path d="M5.5 14h5M8 11v3"/></svg>',
   };
 
   /* ------------------------------------------------------------------ *
@@ -383,6 +384,30 @@
 
     const view = document.createElement("section");
     view.className = "view";
+    if (ds.kind === "desktop") {
+      view.innerHTML = `<div class="term-head">
+          <span class="term-dot"></span>
+          <span class="term-title"></span>
+          <span class="term-hint">远程桌面（VNC，经 SSH 隧道）</span>
+          <span class="spacer"></span>
+          <button class="btn small act-reconnect">重连</button>
+        </div>
+        <div class="desktop-wrap"><div class="desktop-msg show">正在连接…</div></div>`;
+      $("tabbody").insertBefore(view, $("empty-state"));
+      ds.view = view;
+      ds.titleEl = view.querySelector(".term-title");
+      ds.dotEl = view.querySelector(".term-dot");
+      ds.shellBtn = null;
+      ds.termEl = null;
+      ds.console = null;
+      ds.desktopWrap = view.querySelector(".desktop-wrap");
+      ds.desktopMsg = view.querySelector(".desktop-msg");
+      view.querySelector(".act-reconnect").addEventListener("click", () => connectDesktop(ds, true));
+      state.devices.set(ds.id, ds);
+      applyDeviceStatus(ds);
+      return ds;
+    }
+
     view.innerHTML = `<div class="term-head">
         <span class="term-dot"></span>
         <span class="term-title"></span>
@@ -411,6 +436,57 @@
     return ds;
   }
 
+  /* ------------------------------------------------------------------ *
+   * remote desktop (VNC over the SSH tunnel)
+   * ------------------------------------------------------------------ */
+  let rfbModule = null;
+  function desktopWSBase() {
+    return (window.__EDGEKIT_WS__ || "").replace(/\/ws$/, "");
+  }
+  async function loadRFB() {
+    if (!rfbModule) {
+      const httpBase = desktopWSBase().replace(/^ws/, "http");
+      const mod = await import(httpBase + "/novnc/core/rfb.js");
+      rfbModule = mod.default || mod.RFB;
+    }
+    return rfbModule;
+  }
+  async function connectDesktop(ds, force) {
+    if (!ds || ds.kind !== "desktop") return;
+    if (ds.rfb) {
+      try { ds.rfb.disconnect(); } catch (_) { /* ignore */ }
+      ds.rfb = null;
+    }
+    if (!force && ds.desktopConnected) return;
+    ds.desktopMsg.textContent = "正在加载远程桌面…";
+    ds.desktopMsg.classList.add("show");
+    let RFB;
+    try {
+      RFB = await loadRFB();
+    } catch (e) {
+      ds.desktopMsg.textContent = "noVNC 加载失败：" + e;
+      return;
+    }
+    try {
+      const url = desktopWSBase() + "/desktop/ws?session=" + encodeURIComponent(ds.id);
+      const rfb = new RFB(ds.desktopWrap, url, { credentials: { password: "" } });
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false;
+      rfb.background = "#000";
+      rfb.addEventListener("connect", () => {
+        ds.desktopConnected = true;
+        ds.desktopMsg.classList.remove("show");
+      });
+      rfb.addEventListener("disconnect", (e) => {
+        ds.desktopConnected = false;
+        ds.desktopMsg.textContent = (e.detail && e.detail.clean) ? "已断开" : "连接中断，点击重连";
+        ds.desktopMsg.classList.add("show");
+      });
+      ds.rfb = rfb;
+    } catch (e) {
+      ds.desktopMsg.textContent = "连接失败：" + e;
+    }
+  }
   // The host keeps an append-only timeline per device; ask for the tail of it.
   function requestTimeline(ds) {
     send("timeline", { limit: 3000 }, ds.id);
@@ -429,10 +505,11 @@
   function removeDeviceSession(id) {
     const ds = state.devices.get(id);
     if (!ds) return;
+    if (ds.rfb) { try { ds.rfb.disconnect(); } catch (_) { /* ignore */ } }
     ds.tab.remove();
     ds.item.remove();
     ds.view.remove();
-    ds.console.clear();
+    if (ds.console) ds.console.clear();
     state.devices.delete(id);
   }
 
@@ -440,14 +517,18 @@
     if (!ds) return;
     const connected = !!ds.connected;
     const label = ds.kind === "serial" ? shortPort(ds.label) : ds.label;
-    ds.tab.querySelector(".tab-label").textContent = (ds.kind === "serial" ? "串口 · " : "SSH · ") + label;
-    ds.item.querySelector("b").textContent = ds.kind === "serial" ? "串口会话" : "SSH 会话";
+    const prefix = ds.kind === "serial" ? "串口 · " : ds.kind === "desktop" ? "桌面 · " : "SSH · ";
+    const name = ds.kind === "serial" ? "串口会话" : ds.kind === "desktop" ? "桌面会话" : "SSH 会话";
+    ds.tab.querySelector(".tab-label").textContent = prefix + label;
+    ds.item.querySelector("b").textContent = name;
     ds.item.querySelector("small").textContent = label;
     ds.item.querySelector(".s-dot").classList.toggle("on", connected);
-    ds.titleEl.textContent = (ds.kind === "serial" ? "串口 " : "SSH ") + ds.label + (connected ? "" : "（未连接）");
+    ds.titleEl.textContent = prefix + ds.label + (connected ? "" : "（未连接）");
     ds.dotEl.classList.toggle("on", connected);
-    ds.shellBtn.classList.toggle("hidden", ds.kind !== "ssh");
-    ds.shellBtn.textContent = ds.shell ? "关闭 Shell" : "打开 Shell";
+    if (ds.shellBtn) {
+      ds.shellBtn.classList.toggle("hidden", ds.kind !== "ssh");
+      if (ds.kind === "ssh") ds.shellBtn.textContent = ds.shell ? "关闭 Shell" : "打开 Shell";
+    }
     if (ds.id === state.focusDevice) {
       updateDeviceInfo(ds);
       updateWorkspaceContext(false);
@@ -461,6 +542,7 @@
     const ds = state.devices.get(id);
     if (!ds) return;
     if (ds.kind === "serial") send("serial.close", null, id);
+    else if (ds.kind === "desktop") send("desktop.close", null, id);
     else send("ssh.disconnect", null, id);
   }
 
@@ -539,7 +621,8 @@
         send("session.focus", null, id);
         updateAgentFocus();
         updateDeviceInfo(ds);
-        if (ds.termEl.tabIndex >= 0) ds.termEl.focus();
+        if (ds.kind === "desktop") connectDesktop(ds, false);
+        else if (ds.termEl && ds.termEl.tabIndex >= 0) ds.termEl.focus();
         if (ds.kind === "ssh" && ds.shell) {
           const { cols, rows } = termSize(ds.termEl);
           send("ssh.shell.resize", { cols, rows }, ds.id);
@@ -807,8 +890,9 @@
    * ------------------------------------------------------------------ */
   function updateDeviceInfo(ds) {
     if (!ds) return;
+    const type = ds.kind === "serial" ? "串口" : ds.kind === "desktop" ? "远程桌面" : "SSH";
     const rows = [
-      ["类型", ds.kind === "serial" ? "串口" : "SSH"],
+      ["类型", type],
       ["目标", ds.label || "—"],
       ["状态", ds.connected ? "已连接" : "未连接"],
     ];
@@ -818,7 +902,8 @@
       .map(([k, v]) => `<div class="dev-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`)
       .join("");
     $("m-device").textContent = ds.connected ? "已连接" : "未连接";
-    $("btn-device-toggle").textContent = ds.kind === "serial" ? "关闭串口" : "断开 SSH";
+    $("btn-device-toggle").textContent =
+      ds.kind === "serial" ? "关闭串口" : ds.kind === "desktop" ? "关闭桌面" : "断开 SSH";
     $("btn-device-shell").classList.toggle("hidden", ds.kind !== "ssh");
     $("btn-device-shell").textContent = ds.shell ? "关闭 Shell" : "打开 Shell";
   }
@@ -827,14 +912,13 @@
    * workspace (local / remote / serial)
    * ------------------------------------------------------------------ */
   function computeSides() {
+    // The local workspace is always available; remote needs SFTP and the serial
+    // device listing needs an open serial port.
     const ds = focusedDevice();
-    const sshReady = !!(ds && ds.kind === "ssh" && ds.sftp);
-    const serReady = !!(ds && ds.kind === "serial" && ds.connected);
-    const sides = [];
-    if (!(ds && ds.kind === "serial" && !sshReady)) sides.push("local");
-    if (sshReady) sides.push("remote");
-    if (serReady) sides.push("serial");
-    return sides.length ? sides : ["local"];
+    const sides = ["local"];
+    if (ds && ds.kind === "ssh" && ds.sftp) sides.push("remote");
+    if (ds && ds.kind === "serial" && ds.connected) sides.push("serial");
+    return sides;
   }
 
   function preferredSide(sides) {
@@ -1517,6 +1601,7 @@
     switch (action) {
       case "new-session": showNewSession("serial"); break;
       case "open-agent": openAgentTab(); break;
+      case "new-desktop": showNewSession("desktop"); break;
       case "close-current":
         if (state.activeTab === "agent") closeAgentTab();
         else if (ds) closeDeviceTab(ds.id);
@@ -1575,12 +1660,13 @@
     $("session-modal").classList.remove("show");
   }
   function setNewKind(kind) {
-    newKind = kind === "ssh" ? "ssh" : "serial";
+    newKind = kind === "ssh" || kind === "desktop" ? kind : "serial";
     document.querySelectorAll("#new-kind button").forEach((b) => {
       b.classList.toggle("active", b.dataset.kind === newKind);
     });
     $("new-serial-form").classList.toggle("hidden", newKind !== "serial");
-    $("new-ssh-form").classList.toggle("hidden", newKind !== "ssh");
+    $("new-ssh-form").classList.toggle("hidden", newKind === "serial");
+    $("field-display").classList.toggle("hidden", newKind !== "desktop");
   }
   function createFromDialog() {
     if (newKind === "serial") {
@@ -1595,14 +1681,20 @@
       });
     } else {
       const auth = $("sel-auth").value;
-      send("ssh.connect", {
+      const payload = {
         host: $("in-host").value.trim(),
         port: parseInt($("in-port").value, 10) || 22,
         user: $("in-user").value.trim(),
         password: auth === "password" ? $("in-password").value : "",
         privateKey: auth === "key" ? $("in-key").value : "",
         passphrase: auth === "key" ? $("in-passphrase").value : "",
-      });
+      };
+      if (newKind === "desktop") {
+        payload.display = $("in-display").value.trim() || ":0";
+        send("desktop.connect", payload);
+      } else {
+        send("ssh.connect", payload);
+      }
     }
     hideNewSession();
   }
@@ -1786,7 +1878,7 @@
   const PERSIST_FIELDS = [
     "in-host", "in-port", "in-user", "sel-auth", "in-key", "in-passphrase",
     "in-baud", "sel-databits", "sel-stopbits", "sel-parity", "sel-port",
-    "in-agent-base", "in-agent-model",
+    "in-agent-base", "in-agent-model", "in-display",
   ];
   function collectSettings() {
     const data = {};

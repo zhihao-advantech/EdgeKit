@@ -6,6 +6,7 @@ package sshclient
 import (
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -324,6 +325,12 @@ const execTimeout = 60 * time.Second
 // output (bounded by maxBytes). An interactive shell session is unaffected. The
 // command is aborted if it runs longer than execTimeout.
 func (m *Manager) ExecCapture(command string, maxBytes int) (string, error) {
+	return m.ExecCaptureTimeout(command, maxBytes, execTimeout)
+}
+
+// ExecCaptureTimeout is ExecCapture with an explicit timeout (used by longer
+// operations such as installing a package on the board).
+func (m *Manager) ExecCaptureTimeout(command string, maxBytes int, timeout time.Duration) (string, error) {
 	m.mu.Lock()
 	if !m.connected || m.client == nil {
 		m.mu.Unlock()
@@ -334,6 +341,9 @@ func (m *Manager) ExecCapture(command string, maxBytes int) (string, error) {
 
 	if maxBytes <= 0 {
 		maxBytes = 64 * 1024
+	}
+	if timeout <= 0 {
+		timeout = execTimeout
 	}
 	session, err := client.NewSession()
 	if err != nil {
@@ -351,9 +361,9 @@ func (m *Manager) ExecCapture(command string, maxBytes int) (string, error) {
 	var runErr error
 	select {
 	case runErr = <-done:
-	case <-time.After(execTimeout):
+	case <-time.After(timeout):
 		_ = session.Close() // unblock Run
-		return "", fmt.Errorf("命令执行超时（>%s）", execTimeout)
+		return "", fmt.Errorf("命令执行超时（>%s）", timeout)
 	}
 
 	out := buf.String()
@@ -372,6 +382,20 @@ func (m *Manager) RawClient() *ssh.Client {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.client
+}
+
+// Dial opens a TCP connection to addr from the remote host, tunnelled over the
+// existing SSH connection (a direct-tcpip channel). No local listener or extra
+// credentials are needed — used by the remote-desktop bridge to reach a VNC
+// server bound to the board's loopback.
+func (m *Manager) Dial(network, addr string) (net.Conn, error) {
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+	if client == nil {
+		return nil, fmt.Errorf("SSH 未连接")
+	}
+	return client.Dial(network, addr)
 }
 
 // Target returns a human-readable description of the connection.

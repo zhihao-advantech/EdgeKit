@@ -39,6 +39,7 @@
       <div class="mi" data-action="new-session">新建会话…</div>
       <div class="sep"></div>
       <div class="mi" data-action="open-agent">打开 Agent 会话</div>
+      <div class="mi" data-action="new-desktop">新建桌面会话（VNC）</div>
       <div class="mi" data-action="close-current">关闭当前标签</div>
       <div class="mi" data-action="close-all">全部关闭标签</div>
     </div>
@@ -284,6 +285,7 @@
       <div class="seg" id="new-kind">
         <button data-kind="serial" class="active">串口</button>
         <button data-kind="ssh">SSH</button>
+        <button data-kind="desktop">桌面</button>
       </div>
 
       <div id="new-serial-form">
@@ -334,6 +336,9 @@
           <label class="field"><span>私钥（PEM）</span><textarea id="in-key" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
           <label class="field"><span>私钥口令（可选）</span><input id="in-passphrase" type="password" autocomplete="new-password"></label>
         </div>
+        <label class="field hidden" id="field-display"><span>显示 (DISPLAY)</span>
+          <input id="in-display" value=":0" placeholder=":0" autocomplete="off">
+        </label>
       </div>
 
       <div class="modal-actions">

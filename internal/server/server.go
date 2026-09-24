@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"edgekit/internal/agent"
+	"edgekit/internal/desktop"
 	"edgekit/internal/kit"
 	"edgekit/internal/kits"
 	"edgekit/internal/policy"
@@ -46,6 +48,15 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+// desktopUpgrader carries the RFB byte stream and negotiates the subprotocol
+// noVNC requests ("binary" with a base64 fallback).
+var desktopUpgrader = websocket.Upgrader{
+	ReadBufferSize:  1 << 16,
+	WriteBufferSize: 1 << 16,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+	Subprotocols:    []string{"binary", "base64"},
+}
+
 // message is the envelope exchanged with the UI.
 type message struct {
 	Type      string          `json:"type"`
@@ -56,12 +67,54 @@ type message struct {
 // deviceSession is one connected serial port or SSH host.
 type deviceSession struct {
 	id     string
-	kind   string // "serial" | "ssh"
+	kind   string // "serial" | "ssh" | "desktop"
 	label  string
 	serial *serial.Manager    // when kind == "serial"
-	ssh    *sshclient.Manager // when kind == "ssh"
+	ssh    *sshclient.Manager // when kind == "ssh", or the borrowed connection for "desktop"
 	sftp   *sftpx.Manager     // when kind == "ssh"
 	tl     *timeline.Timeline // per-device record (the single source of observations)
+
+	sshOwner string        // when kind == "desktop": the SSH session it borrows
+	desktop  *desktopState // when kind == "desktop"
+}
+
+// desktopState tracks the loopback RFB port and the live WebSocket bridges of a
+// remote-desktop session.
+type desktopState struct {
+	mu     sync.Mutex
+	port   int
+	conns  map[*websocket.Conn]struct{}
+	closed bool
+}
+
+func (d *desktopState) add(ws *websocket.Conn) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		_ = ws.Close()
+		return
+	}
+	d.conns[ws] = struct{}{}
+}
+
+func (d *desktopState) remove(ws *websocket.Conn) {
+	d.mu.Lock()
+	delete(d.conns, ws)
+	d.mu.Unlock()
+}
+
+func (d *desktopState) closeAll() {
+	d.mu.Lock()
+	d.closed = true
+	conns := make([]*websocket.Conn, 0, len(d.conns))
+	for ws := range d.conns {
+		conns = append(conns, ws)
+	}
+	d.conns = map[*websocket.Conn]struct{}{}
+	d.mu.Unlock()
+	for _, ws := range conns {
+		_ = ws.Close()
+	}
 }
 
 // timelineMax bounds the per-device record kept in memory.
@@ -206,34 +259,57 @@ func (s *Server) registerSession(ds *deviceSession) {
 func (s *Server) closeSession(id string) {
 	s.mu.Lock()
 	ds := s.sessions[id]
-	delete(s.sessions, id)
-	for i, v := range s.order {
-		if v == id {
-			s.order = append(s.order[:i], s.order[i+1:]...)
-			break
+	// Closing an SSH session also closes the desktop sessions borrowing it.
+	var victims []*deviceSession
+	if ds != nil {
+		victims = append(victims, ds)
+		if ds.kind == "ssh" {
+			for _, d := range s.sessions {
+				if d.kind == "desktop" && d.sshOwner == id {
+					victims = append(victims, d)
+				}
+			}
 		}
 	}
-	if s.focus == id {
-		s.focus = ""
-		if len(s.order) > 0 {
-			s.focus = s.order[len(s.order)-1]
+	for _, v := range victims {
+		delete(s.sessions, v.id)
+		for i, x := range s.order {
+			if x == v.id {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+	}
+	if s.focus != "" {
+		if _, ok := s.sessions[s.focus]; !ok {
+			s.focus = ""
+			if len(s.order) > 0 {
+				s.focus = s.order[len(s.order)-1]
+			}
 		}
 	}
 	focus := s.focus
 	s.mu.Unlock()
 
-	if ds != nil {
-		if ds.serial != nil {
-			_ = ds.serial.Close()
+	for _, v := range victims {
+		switch v.kind {
+		case "desktop":
+			if v.desktop != nil {
+				v.desktop.closeAll()
+			}
+		default:
+			if v.serial != nil {
+				_ = v.serial.Close()
+			}
+			if v.ssh != nil {
+				_ = v.ssh.Disconnect()
+			}
+			if v.sftp != nil {
+				v.sftp.Detach()
+			}
 		}
-		if ds.ssh != nil {
-			_ = ds.ssh.Disconnect()
-		}
-		if ds.sftp != nil {
-			ds.sftp.Detach()
-		}
+		s.broadcast("session.closed", map[string]any{"id": v.id, "focus": focus})
 	}
-	s.broadcast("session.closed", map[string]any{"id": id, "focus": focus})
 	if focus != "" {
 		s.broadcast("session.focus", map[string]any{"id": focus})
 	}
@@ -250,6 +326,8 @@ func sessionInfo(ds *deviceSession) map[string]any {
 		item["shell"] = ds.ssh.HasShell()
 		item["sftp"] = ds.sftp.IsConnected()
 		item["config"] = ds.ssh.Config()
+	case "desktop":
+		item["connected"] = ds.ssh != nil && ds.ssh.IsConnected()
 	}
 	return item
 }
@@ -390,6 +468,12 @@ func (s *Server) Start(addr string) (string, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
+	mux.HandleFunc("/desktop/ws", s.handleDesktopWS)
+	if sub, err := fs.Sub(webAssets, "web/novnc"); err == nil {
+		mux.Handle("/novnc/", novncHandler(http.StripPrefix("/novnc/", http.FileServer(http.FS(sub)))))
+	} else {
+		log.Printf("noVNC 资源不可用: %v", err)
+	}
 
 	s.http = &http.Server{Handler: mux}
 	go func() {
@@ -535,6 +619,105 @@ func (c *client) worker() {
 			c.srv.dispatch(c, msg)
 		}
 	}
+}
+
+// novncHandler serves the embedded noVNC modules with the CORS header the
+// SetHtml page needs for its module imports.
+func novncHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if strings.HasSuffix(r.URL.Path, ".js") {
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleDesktopWS bridges a WebSocket (noVNC's RFB stream) to the board's VNC
+// port over the SSH connection of the owning desktop session.
+func (s *Server) handleDesktopWS(w http.ResponseWriter, r *http.Request) {
+	ds := s.session(r.URL.Query().Get("session"))
+	if ds == nil || ds.kind != "desktop" || ds.ssh == nil || ds.desktop == nil {
+		http.Error(w, "desktop session not found", http.StatusNotFound)
+		return
+	}
+	if !ds.ssh.IsConnected() {
+		http.Error(w, "SSH 未连接", http.StatusBadGateway)
+		return
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", ds.desktop.port)
+	conn, err := ds.ssh.Dial("tcp", addr)
+	if err != nil {
+		http.Error(w, "无法连接板子的 VNC: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	ws, err := desktopUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	ds.desktop.add(ws)
+	go func() {
+		bridgeRFB(ws, conn)
+		ds.desktop.remove(ws)
+		_ = conn.Close()
+		_ = ws.Close()
+	}()
+}
+
+// bridgeRFB copies bytes between a WebSocket and the RFB TCP stream until either
+// side closes. Each direction has its own goroutine (so no concurrent writes to
+// one socket).
+func bridgeRFB(ws *websocket.Conn, conn net.Conn) {
+	done := make(chan struct{}, 2)
+
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			mt, data, err := ws.ReadMessage()
+			if err != nil {
+				return
+			}
+			if mt != websocket.BinaryMessage && mt != websocket.TextMessage {
+				continue
+			}
+			if _, err := conn.Write(data); err != nil {
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer func() { done <- struct{}{} }()
+		buf := make([]byte, 64*1024)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	<-done
+}
+
+// handleDesktopOpen starts a remote desktop on an existing SSH session.
+func (s *Server) handleDesktopOpen(c *client, msg message) {
+	ssh := s.session(msg.SessionID)
+	if ssh == nil || ssh.kind != "ssh" || ssh.ssh == nil || !ssh.ssh.IsConnected() {
+		s.sendError(c, fmt.Errorf("请先连接 SSH 会话再打开桌面"))
+		return
+	}
+	var p struct {
+		Display string `json:"display"`
+	}
+	_ = json.Unmarshal(msg.Payload, &p)
+	s.startDesktop(c, ssh, p.Display)
 }
 
 func (c *client) readPump() {
@@ -947,6 +1130,12 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.emitAgentSessions()
 	case "agent.session.load":
 		s.handleAgentSessionLoad(msg.Payload)
+	case "desktop.open":
+		s.handleDesktopOpen(c, msg)
+	case "desktop.connect":
+		s.handleDesktopConnect(c, msg.Payload)
+	case "desktop.close":
+		s.closeSession(msg.SessionID)
 	case "settings.set":
 		var p map[string]any
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
@@ -1049,6 +1238,14 @@ func (s *Server) handleSSHConnect(c *client, raw json.RawMessage) {
 		s.sendError(c, fmt.Errorf("参数错误: %w", err))
 		return
 	}
+	if _, err := s.connectSSH(cfg); err != nil {
+		s.sendError(c, err)
+	}
+}
+
+// connectSSH establishes an SSH session (shared by the SSH and remote-desktop
+// entry points) and registers it.
+func (s *Server) connectSSH(cfg sshclient.Config) (*deviceSession, error) {
 	if cfg.Port == 0 {
 		cfg.Port = 22
 	}
@@ -1059,13 +1256,12 @@ func (s *Server) handleSSHConnect(c *client, raw json.RawMessage) {
 	ds.sftp = sftpx.New(nil)
 
 	if err := ds.ssh.Connect(cfg); err != nil {
-		s.sendError(c, err)
-		return
+		return nil, err
 	}
 	// Share the same connection for the workspace file panel (SFTP).
 	if rc := ds.ssh.RawClient(); rc != nil {
 		if err := ds.sftp.Attach(rc, ds.ssh.Target()); err != nil {
-			s.sendError(c, err)
+			log.Printf("attach sftp failed: %v", err)
 		}
 	}
 	s.registerSession(ds)
@@ -1075,6 +1271,49 @@ func (s *Server) handleSSHConnect(c *client, raw json.RawMessage) {
 		Data: []byte(fmt.Sprintf("已连接 %s@%s:%d", cfg.User, cfg.Host, cfg.Port)),
 		Time: time.Now(),
 	})
+	return ds, nil
+}
+
+// handleDesktopConnect opens an SSH session and starts a remote desktop on it,
+// so a desktop can be created directly from the new-session dialog (a peer of
+// serial / SSH).
+func (s *Server) handleDesktopConnect(c *client, raw json.RawMessage) {
+	var p struct {
+		sshclient.Config
+		Display string `json:"display"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	ssh, err := s.connectSSH(p.Config)
+	if err != nil {
+		s.sendError(c, err)
+		return
+	}
+	s.startDesktop(c, ssh, p.Display)
+}
+
+// startDesktop installs/starts x11vnc on the SSH session and opens a desktop
+// session bound to it.
+func (s *Server) startDesktop(c *client, ssh *deviceSession, display string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Second)
+	defer cancel()
+	port, err := desktop.EnsureVNC(ctx, ssh.ssh, display, 0)
+	if err != nil {
+		s.sendError(c, err)
+		return
+	}
+	ds := &deviceSession{
+		id:       s.nextID("desktop"),
+		kind:     "desktop",
+		label:    "桌面 · " + ssh.label,
+		ssh:      ssh.ssh,
+		sshOwner: ssh.id,
+		tl:       timeline.New(timelineMax),
+		desktop:  &desktopState{port: port, conns: map[*websocket.Conn]struct{}{}},
+	}
+	s.registerSession(ds)
 }
 
 func (s *Server) handleSSHExec(c *client, msg message) {
