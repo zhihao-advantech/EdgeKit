@@ -55,13 +55,17 @@ func (f Filter) match(r Record) bool {
 	return true
 }
 
-// Timeline is a bounded, append-only record log.
+// Timeline is a bounded, append-only record log. It keeps a fixed-size ring so
+// appending never has to shift the whole buffer.
 type Timeline struct {
 	mu      sync.Mutex
-	records []Record
+	records []Record // fixed length == max; used as a ring
+	head    int      // index of the oldest record
+	count   int      // number of valid records (<= max)
 	max     int
 	seq     uint64
 	update  chan struct{}
+	waiters int
 }
 
 // New creates a timeline keeping at most max records (default 5000).
@@ -69,7 +73,12 @@ func New(max int) *Timeline {
 	if max <= 0 {
 		max = 5000
 	}
-	return &Timeline{max: max, update: make(chan struct{})}
+	return &Timeline{max: max, records: make([]Record, max), update: make(chan struct{})}
+}
+
+// atLocked returns the i-th record (0 == oldest). Caller holds t.mu.
+func (t *Timeline) atLocked(i int) Record {
+	return t.records[(t.head+i)%t.max]
 }
 
 // Append stores a record and stamps it with the next sequence number. It
@@ -86,15 +95,19 @@ func (t *Timeline) Append(r Record) Record {
 		copy(data, r.Data)
 		r.Data = data
 	}
-	t.records = append(t.records, r)
-	if len(t.records) > t.max {
-		drop := len(t.records) - t.max
-		n := copy(t.records, t.records[drop:])
-		t.records = t.records[:n]
+	if t.count < t.max {
+		t.records[(t.head+t.count)%t.max] = r
+		t.count++
+	} else {
+		t.records[t.head] = r
+		t.head = (t.head + 1) % t.max
 	}
-	// Wake any Wait callers: close the current channel and install a new one.
-	close(t.update)
-	t.update = make(chan struct{})
+	// Wake Wait callers, but only when someone is actually waiting (an append
+	// with no waiter must not allocate a channel).
+	if t.waiters > 0 {
+		close(t.update)
+		t.update = make(chan struct{})
+	}
 	t.mu.Unlock()
 	return r
 }
@@ -110,7 +123,7 @@ func (t *Timeline) LastSeq() uint64 {
 func (t *Timeline) Len() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.records)
+	return t.count
 }
 
 // Since returns the records after the given sequence, oldest first. limit <= 0
@@ -118,15 +131,26 @@ func (t *Timeline) Len() int {
 func (t *Timeline) Since(after uint64, limit int) []Record {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := make([]Record, 0, len(t.records))
-	for _, r := range t.records {
+	// Walk from the newest backwards, stopping as soon as we have enough or hit
+	// the mark, so only the records we return are cloned.
+	capHint := t.count
+	if limit > 0 && limit < capHint {
+		capHint = limit
+	}
+	out := make([]Record, 0, capHint)
+	for i := t.count - 1; i >= 0; i-- {
+		r := t.atLocked(i)
 		if r.Seq <= after {
-			continue
+			break
 		}
 		out = append(out, clone(r))
+		if limit > 0 && len(out) == limit {
+			break
+		}
 	}
-	if limit > 0 && len(out) > limit {
-		out = out[len(out)-limit:]
+	// Reverse into oldest-first order.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
 	}
 	return out
 }
@@ -139,15 +163,18 @@ func (t *Timeline) Wait(ctx context.Context, f Filter, timeout time.Duration) (R
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		if r, ok := t.find(f); ok {
+		t.mu.Lock()
+		if r, ok := t.findLocked(f); ok {
+			t.mu.Unlock()
 			return r, nil
 		}
-		t.mu.Lock()
 		ch := t.update
+		t.waiters++
 		t.mu.Unlock()
 
 		remain := time.Until(deadline)
 		if remain <= 0 {
+			t.removeWaiter()
 			return Record{}, ErrTimeout
 		}
 		timer := time.NewTimer(remain)
@@ -155,19 +182,35 @@ func (t *Timeline) Wait(ctx context.Context, f Filter, timeout time.Duration) (R
 		case <-ch:
 			timer.Stop()
 		case <-timer.C:
+			t.removeWaiter()
 			return Record{}, ErrTimeout
 		case <-ctx.Done():
 			timer.Stop()
+			t.removeWaiter()
 			return Record{}, ctx.Err()
 		}
+		t.removeWaiter()
 	}
+}
+
+func (t *Timeline) removeWaiter() {
+	t.mu.Lock()
+	if t.waiters > 0 {
+		t.waiters--
+	}
+	t.mu.Unlock()
 }
 
 // find returns the first record after f.AfterSeq matching f.
 func (t *Timeline) find(f Filter) (Record, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, r := range t.records {
+	return t.findLocked(f)
+}
+
+func (t *Timeline) findLocked(f Filter) (Record, bool) {
+	for i := 0; i < t.count; i++ {
+		r := t.atLocked(i)
 		if r.Seq <= f.AfterSeq {
 			continue
 		}

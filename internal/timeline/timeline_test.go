@@ -98,3 +98,28 @@ func TestWaitIgnoresHistoryBeforeCall(t *testing.T) {
 		t.Fatalf("history should not satisfy Wait, got %v", err)
 	}
 }
+
+// BenchmarkTimelineAppend measures an append with no waiter (the steady-state
+// case): the wake-up channel must not be reallocated per append.
+func BenchmarkTimelineAppend(b *testing.B) {
+	tl := New(5000)
+	rec := Record{Channel: ChannelSerial, Kind: "rx", Data: []byte("x")}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tl.Append(rec)
+	}
+}
+
+// BenchmarkTimelineSince measures reading the newest window out of a full log.
+func BenchmarkTimelineSince(b *testing.B) {
+	tl := New(5000)
+	for i := 0; i < 5000; i++ {
+		tl.Append(Record{Channel: ChannelSerial, Kind: "rx", Data: []byte("x")})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = tl.Since(2000, 3000)
+	}
+}

@@ -58,7 +58,9 @@ type Manager struct {
 	cfg       Config
 	open      bool
 	done      chan struct{}
-	recent    []byte
+	recent    []byte // fixed length recentMax, used as a ring
+	recentW   int    // next write index into recent
+	recentN   int    // number of valid bytes in recent (<= recentMax)
 	rxTotal   uint64
 	capturing int
 	onEvent   func(Event)
@@ -131,7 +133,9 @@ func (m *Manager) Open(cfg Config) error {
 	m.port = port
 	m.cfg = cfg
 	m.open = true
-	m.recent = nil
+	m.recent = make([]byte, recentMax)
+	m.recentW = 0
+	m.recentN = 0
 	m.rxTotal = 0
 	m.capturing = 0
 	m.done = make(chan struct{})
@@ -196,12 +200,27 @@ func (m *Manager) Port() string {
 	return m.cfg.Port
 }
 
-// Recent returns a copy of the most recently received bytes.
+// Recent returns a copy of the most recently received bytes (oldest first).
 func (m *Manager) Recent() []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]byte, len(m.recent))
-	copy(out, m.recent)
+	return m.recTailLocked(m.recentN)
+}
+
+// recTailLocked copies the newest n bytes out of the ring, in order.
+// Caller holds m.mu.
+func (m *Manager) recTailLocked(n int) []byte {
+	if n <= 0 || m.recentN == 0 {
+		return nil
+	}
+	if n > m.recentN {
+		n = m.recentN
+	}
+	out := make([]byte, n)
+	begin := (m.recentW - n + recentMax) % recentMax
+	if copied := copy(out, m.recent[begin:]); copied < n {
+		copy(out[copied:], m.recent[:n-copied])
+	}
 	return out
 }
 
@@ -244,12 +263,27 @@ func (m *Manager) writeRaw(p []byte) error {
 }
 
 func (m *Manager) appendRecent(p []byte) {
+	if len(p) == 0 {
+		return
+	}
 	m.mu.Lock()
-	m.recent = append(m.recent, p...)
 	m.rxTotal += uint64(len(p))
-	if len(m.recent) > recentMax {
-		n := copy(m.recent, m.recent[len(m.recent)-recentMax:])
-		m.recent = m.recent[:n]
+	if len(p) >= recentMax {
+		// Only the tail can survive; keep the last recentMax bytes.
+		copy(m.recent, p[len(p)-recentMax:])
+		m.recentW = 0
+		m.recentN = recentMax
+		m.mu.Unlock()
+		return
+	}
+	if copied := copy(m.recent[m.recentW:], p); copied < len(p) {
+		copy(m.recent, p[copied:])
+	}
+	m.recentW = (m.recentW + len(p)) % recentMax
+	if m.recentN+len(p) > recentMax {
+		m.recentN = recentMax
+	} else {
+		m.recentN += len(p)
 	}
 	m.mu.Unlock()
 }
@@ -264,15 +298,10 @@ func (m *Manager) captureFrom(start uint64) string {
 		return ""
 	}
 	want := int(m.rxTotal - start)
-	if want > len(m.recent) {
-		want = len(m.recent)
+	if want > m.recentN {
+		want = m.recentN
 	}
-	if want <= 0 {
-		return ""
-	}
-	out := make([]byte, want)
-	copy(out, m.recent[len(m.recent)-want:])
-	return strings.ToValidUTF8(string(out), "\uFFFD")
+	return strings.ToValidUTF8(string(m.recTailLocked(want)), "\uFFFD")
 }
 
 // IsOpen reports whether a port is currently open.

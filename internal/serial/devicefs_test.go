@@ -6,14 +6,11 @@ import (
 )
 
 // TestCaptureFromSaturatedRing guards the regression where a full receive ring
-// stopped growing len(recent), so a len-based slice returned nothing.
+// stopped growing, so a len-based slice returned nothing.
 func TestCaptureFromSaturatedRing(t *testing.T) {
-	m := &Manager{}
-	m.recent = bytes.Repeat([]byte("a"), recentMax)
-	m.rxTotal = 1000
-	// Four new bytes arrived during a capture and sit at the tail of the ring.
-	copy(m.recent[len(m.recent)-4:], []byte("XYZ\n"))
-	m.rxTotal = 1004
+	m := &Manager{recent: make([]byte, recentMax), recentN: recentMax, recentW: 4, rxTotal: 1004}
+	// The newest four bytes sit at indices 0..3 (the write cursor wrapped to 4).
+	copy(m.recent[0:4], []byte("XYZ\n"))
 
 	if got := m.captureFrom(1000); got != "XYZ\n" {
 		t.Fatalf("captureFrom(1000) = %q, want %q", got, "XYZ\n")
@@ -23,6 +20,56 @@ func TestCaptureFromSaturatedRing(t *testing.T) {
 	}
 	if got := m.captureFrom(0); len(got) != 1004 {
 		t.Fatalf("captureFrom(0) len = %d, want 1004", len(got))
+	}
+}
+
+// TestRingAppendWraps checks the ring keeps the newest recentMax bytes in order
+// once it has wrapped several times.
+func TestRingAppendWraps(t *testing.T) {
+	m := &Manager{recent: make([]byte, recentMax)}
+	total := recentMax + 3
+	for i := 0; i < total; i++ {
+		m.appendRecent([]byte{byte(i & 0xff)})
+	}
+	got := m.Recent()
+	if len(got) != recentMax {
+		t.Fatalf("Recent len = %d, want %d", len(got), recentMax)
+	}
+	if got[0] != byte((total-recentMax)&0xff) {
+		t.Fatalf("oldest byte = %d, want %d", got[0], byte((total-recentMax)&0xff))
+	}
+	if got[len(got)-1] != byte((total-1)&0xff) {
+		t.Fatalf("newest byte = %d, want %d", got[len(got)-1], byte((total-1)&0xff))
+	}
+	if m.rxTotal != uint64(total) {
+		t.Fatalf("rxTotal = %d, want %d", m.rxTotal, total)
+	}
+}
+
+// TestRingAppendChunkWraps checks a multi-byte chunk that crosses the end of the
+// ring is stored contiguously on read.
+func TestRingAppendChunkWraps(t *testing.T) {
+	m := &Manager{recent: make([]byte, recentMax)}
+	m.appendRecent(bytes.Repeat([]byte{'a'}, recentMax-2))
+	m.appendRecent([]byte("HELLO"))
+	got := m.Recent()
+	if len(got) != recentMax {
+		t.Fatalf("Recent len = %d, want %d", len(got), recentMax)
+	}
+	if string(got[len(got)-5:]) != "HELLO" {
+		t.Fatalf("tail = %q, want HELLO", got[len(got)-5:])
+	}
+}
+
+// BenchmarkAppendRecentSaturated measures the per-chunk cost once the receive
+// ring is full (the previous implementation memmoved 64 KiB every chunk).
+func BenchmarkAppendRecentSaturated(b *testing.B) {
+	m := &Manager{recent: make([]byte, recentMax), recentN: recentMax}
+	one := []byte{'x'}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.appendRecent(one)
 	}
 }
 
