@@ -164,15 +164,46 @@
           <button data-target="remote" class="active">Remote</button>
         </div>
       </div>
-      <label class="field"><span>Base URL</span>
-        <input id="in-agent-base" placeholder="https://api.openai.com/v1" autocomplete="off">
+      <label class="field"><span>Agent 大脑</span>
+        <select id="sel-agent-backend" title="内置大脑，或通过 ACP 驱动外部 Agent">
+          <option value="builtin">内置（OpenAI 兼容 / Normal）</option>
+          <option value="hermes">Hermes（ACP）</option>
+          <option value="openclaw">OpenClaw（ACP）</option>
+          <option value="custom">自定义 ACP…</option>
+        </select>
       </label>
-      <label class="field"><span>API Key</span>
-        <input id="in-agent-key" type="password" placeholder="sk-..." autocomplete="off">
+      <label class="field hidden" id="field-agent-acp-command"><span>ACP 命令</span>
+        <input id="in-agent-acp-command" placeholder="hermes acp" autocomplete="off">
       </label>
-      <label class="field"><span>模型</span>
-        <input id="in-agent-model" placeholder="gpt-4o-mini" autocomplete="off">
+      <label class="field hidden" id="field-agent-acp-model"><span>模型</span>
+        <select id="sel-agent-acp-model" title="Agent 已配置的模型；选择后立即切换">
+          <option value="">（打开后加载…）</option>
+        </select>
       </label>
+      <label class="tcheck-inline hidden" id="field-agent-acp-override">
+        <input type="checkbox" id="chk-agent-acp-override"> 用 EdgeKit 的模型配置覆盖 Agent（Hermes）
+      </label>
+      <div class="field hidden" id="field-agent-sessions">
+        <span>历史会话</span>
+        <div class="row">
+          <select id="sel-agent-session" style="flex:1" title="恢复 Agent 的历史会话">
+            <option value="">当前会话</option>
+          </select>
+          <button class="btn small" id="btn-agent-session-refresh">刷新</button>
+          <button class="btn small" id="btn-agent-session-new">新会话</button>
+        </div>
+      </div>
+      <div id="agent-builtin-fields">
+        <label class="field"><span>Base URL</span>
+          <input id="in-agent-base" placeholder="https://api.openai.com/v1" autocomplete="off">
+        </label>
+        <label class="field"><span>API Key</span>
+          <input id="in-agent-key" type="password" placeholder="sk-..." autocomplete="off">
+        </label>
+        <label class="field"><span>模型</span>
+          <input id="in-agent-model" placeholder="gpt-4o-mini" autocomplete="off">
+        </label>
+      </div>
       <label class="tcheck-inline"><input type="checkbox" id="chk-agent-auto"> 自动执行修改性操作</label>
       <button class="btn primary block" id="btn-agent-save">保存配置</button>
       <div class="hint" id="agent-hint">未配置 API Key 时使用 Normal 模式（内置流程）。</div>

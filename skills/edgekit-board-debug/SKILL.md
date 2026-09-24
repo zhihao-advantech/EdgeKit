@@ -139,6 +139,24 @@ function-calling（只读工具自动执行，**修改性工具默认需用户�
 未配置模型时，内置 Agent 走 **Normal 模式**（内置流程）：巡检、系统日志、磁盘、内存、进程、系统版本、ping。
 配置模型（OpenAI 兼容）后即可自然语言驱动。
 
+### Agent 大脑可插拔（内置 / ACP）
+
+「会话设置 → Agent 大脑」可切换大脑，工具面与审批不变：
+
+| 选择 | `agent.config` | 说明 |
+| --- | --- | --- |
+| 内置 | `backend:"builtin"` | OpenAI 兼容 / Normal 流程（默认） |
+| Hermes | `backend:"acp", acpCommand:"hermes", acpArgs:["acp"]` | 子进程 `hermes acp`，ACP 驱动 |
+| OpenClaw | `backend:"acp", acpCommand:"openclaw", acpArgs:["acp"]` | 子进程 `openclaw acp`（需 Gateway） |
+| 自定义 | `backend:"acp", acpCommand:"<命令>", acpArgs:[...]` | 任意 ACP Agent |
+
+- EdgeKit 是 ACP **客户端**：`session/new` 时把自己的 `edgekit mcp` 作为 stdio MCP server 交给外部 Agent，
+  因此它用的是你已连好的串口 / SSH 会话，工具调用与审批照常走 `internal/policy`。
+- 外部 Agent 的 `session/request_permission` 会转成界面里的审批卡片（`agent.approve` 放行）。
+- 选择持久化到 `agent-backend` / `agent-acp-command` / `agent-acp-args`。
+- **进程常驻 + 多会话**：`hermes acp` 只启动一次并常驻；`agent.session.new` / `agent.session.list` / `agent.session.load`
+  在同一进程上新建/列出/恢复会话，不重启 Agent。
+
 ### 执行目标：Local / Remote
 
 左侧「会话信息」面板有 **Local | Remote** 切换（默认 **Remote**），按**运行位置**决定指令作用在哪一侧：
@@ -210,9 +228,12 @@ openclaw mcp probe edgekit                               # 18 tools
 | `ssh.shell.resize` | `{cols, rows}` |
 | `ssh.shell.close` | `sessionId` |
 | `agent.send` | `{text}` |
-| `agent.config` | `{baseUrl, apiKey, model, autoRun, target: "local"\|"remote"}` |
+| `agent.config` | `{baseUrl, apiKey, model, autoRun, target: "local"\|"remote", backend: "builtin"\|"acp", acpCommand, acpArgs, acpOverride, acpModel}` |
 | `agent.approve` | `{id, allow}` |
 | `agent.cancel` / `agent.reset` | – |
+| `agent.session.new` | 新建会话（常驻进程内） |
+| `agent.session.list` | → `agent.sessions {sessions, current}` |
+| `agent.session.load` | `{sessionId}` 恢复历史会话 |
 | `fs.list` | `{side: "local"\|"remote"\|"serial", path}` |
 | `fs.mkdir` / `fs.newfile` | `{side, path}` |
 | `fs.upload` | `{dir, name, data}`（本地 → 远端） |

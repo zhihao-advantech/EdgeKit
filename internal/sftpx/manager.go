@@ -34,6 +34,10 @@ type Manager struct {
 	sftp    *sftp.Client
 	label   string
 	onEvent func(kind, msg string)
+
+	// opMu serializes whole operations (and Attach/Detach) so the client handle
+	// is never closed while an operation is using it.
+	opMu sync.Mutex
 }
 
 // New creates an SFTP manager.
@@ -50,6 +54,9 @@ func (m *Manager) emit(kind, msg string) {
 // Attach starts an SFTP subsystem on an existing SSH client. The client is
 // owned by the caller (sshclient) and is not closed by Detach.
 func (m *Manager) Attach(client *ssh.Client, label string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.mu.Lock()
 	if m.sftp != nil {
 		m.mu.Unlock()
@@ -71,6 +78,9 @@ func (m *Manager) Attach(client *ssh.Client, label string) error {
 
 // Detach closes the SFTP subsystem (leaving the SSH connection intact).
 func (m *Manager) Detach() {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.mu.Lock()
 	sc := m.sftp
 	was := sc != nil
@@ -101,6 +111,8 @@ func (m *Manager) Label() string {
 
 // List returns the directory entries at path (directories first).
 func (m *Manager) List(path string) ([]Entry, error) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	sc, err := m.session()
 	if err != nil {
 		return nil, err
@@ -130,6 +142,8 @@ func (m *Manager) List(path string) ([]Entry, error) {
 
 // Mkdir creates a remote directory (and parents).
 func (m *Manager) Mkdir(path string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	sc, err := m.session()
 	if err != nil {
 		return err
@@ -142,6 +156,8 @@ func (m *Manager) Mkdir(path string) error {
 
 // NewFile creates an empty remote file.
 func (m *Manager) NewFile(path string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	sc, err := m.session()
 	if err != nil {
 		return err
@@ -155,6 +171,8 @@ func (m *Manager) NewFile(path string) error {
 
 // Delete removes a remote file, or a directory recursively.
 func (m *Manager) Delete(path string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	sc, err := m.session()
 	if err != nil {
 		return err
@@ -201,6 +219,8 @@ func removeAll(sc *sftp.Client, dir string) error {
 
 // Download reads a remote file (bounded by MaxTransfer).
 func (m *Manager) Download(path string) ([]byte, error) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	sc, err := m.session()
 	if err != nil {
 		return nil, err
@@ -223,6 +243,8 @@ func (m *Manager) Download(path string) ([]byte, error) {
 
 // Upload writes data to a remote file, creating or truncating it.
 func (m *Manager) Upload(path string, data []byte) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	sc, err := m.session()
 	if err != nil {
 		return err

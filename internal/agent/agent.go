@@ -63,6 +63,17 @@ type Config struct {
 	Model   string `json:"model"`
 	AutoRun bool   `json:"autoRun"`
 	Target  string `json:"target"` // "remote" (default) or "local"
+
+	// Backend selects the brain: "builtin" (default) or "acp" (external agent
+	// such as Hermes / OpenClaw driven over the Agent Client Protocol).
+	Backend    string   `json:"backend"`
+	ACPCommand string   `json:"acpCommand"` // executable, e.g. "hermes" or "openclaw"
+	ACPArgs    []string `json:"acpArgs"`    // defaults to ["acp"]
+	// ACPOverride injects EdgeKit's BaseURL/APIKey into the agent process so a
+	// reachable endpoint can be supplied from the UI (currently Hermes).
+	ACPOverride bool `json:"acpOverride"`
+	// ACPModel is the last model chosen in the UI, re-applied to a new session.
+	ACPModel string `json:"acpModel"`
 }
 
 // Deps and the capability interfaces are aliases of the kit package, so the
@@ -105,6 +116,9 @@ type Manager struct {
 	cancel   context.CancelFunc
 	running  bool
 	onEvent  func(Event)
+
+	backend    Backend
+	backendKey string
 }
 
 // New builds an agent manager backed by reg. deps describes the current
@@ -128,18 +142,32 @@ func (m *Manager) Config() Config {
 	return m.cfg
 }
 
-// SetConfig updates the model configuration.
+// SetConfig updates the model configuration. When the selected backend changes
+// and no turn is running, the old backend (and any child process) is torn down.
 func (m *Manager) SetConfig(cfg Config) {
 	m.mu.Lock()
 	m.cfg = cfg
+	var stale Backend
+	if !m.running && m.backend != nil && m.backendKey != cfg.backendKey() {
+		stale = m.backend
+		m.backend = nil
+		m.backendKey = ""
+	}
 	m.mu.Unlock()
+	if stale != nil {
+		_ = stale.Close()
+	}
 }
 
 // Reset clears the conversation.
 func (m *Manager) Reset() {
 	m.mu.Lock()
 	m.history = nil
+	b := m.backend
 	m.mu.Unlock()
+	if b != nil {
+		b.Reset()
+	}
 	m.emit(Event{Kind: KindStatus, Text: "对话已清空"})
 }
 
@@ -147,10 +175,106 @@ func (m *Manager) Reset() {
 func (m *Manager) Cancel() {
 	m.mu.Lock()
 	cancel := m.cancel
+	b := m.backend
 	m.mu.Unlock()
+	if b != nil {
+		b.Cancel()
+	}
 	if cancel != nil {
 		cancel()
 	}
+}
+
+// activeBackend returns the current backend under the manager lock.
+func (m *Manager) activeBackend() Backend {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.backend
+}
+
+// Close releases the active backend and any child process it owns.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	b := m.backend
+	m.backend = nil
+	m.backendKey = ""
+	m.mu.Unlock()
+	if b != nil {
+		_ = b.Close()
+	}
+}
+
+// Prepare ensures the active backend is started (e.g. the ACP agent process),
+// so its model list becomes available. A no-op for backends that need no setup.
+func (m *Manager) Prepare(ctx context.Context) error {
+	m.mu.Lock()
+	b := m.backendLocked(m.cfg)
+	m.mu.Unlock()
+	if p, ok := b.(Preparer); ok {
+		return p.Prepare(ctx)
+	}
+	return nil
+}
+
+// Models returns the active backend's selectable models (nil for builtin).
+func (m *Manager) Models() []Model {
+	if ms, ok := m.activeBackend().(ModelSelector); ok {
+		return ms.Models()
+	}
+	return nil
+}
+
+// CurrentModel returns the active model id, or "" when not applicable.
+func (m *Manager) CurrentModel() string {
+	if ms, ok := m.activeBackend().(ModelSelector); ok {
+		return ms.CurrentModel()
+	}
+	return ""
+}
+
+// SetModel switches the model of the active backend.
+func (m *Manager) SetModel(ctx context.Context, modelID string) error {
+	ms, ok := m.activeBackend().(ModelSelector)
+	if !ok {
+		return fmt.Errorf("当前后端不支持模型选择")
+	}
+	return ms.SetModel(ctx, modelID)
+}
+
+// NewSession starts a fresh conversation on the active backend (ACP only).
+func (m *Manager) NewSession(ctx context.Context) error {
+	sc, ok := m.activeBackend().(SessionController)
+	if !ok {
+		return fmt.Errorf("当前后端不支持会话管理")
+	}
+	return sc.NewSession(ctx)
+}
+
+// ListSessions returns the active backend's persisted conversations.
+func (m *Manager) ListSessions(ctx context.Context) ([]SessionInfo, error) {
+	sc, ok := m.activeBackend().(SessionController)
+	if !ok {
+		return nil, fmt.Errorf("当前后端不支持会话管理")
+	}
+	return sc.ListSessions(ctx)
+}
+
+// LoadSession resumes a persisted conversation on the active backend.
+func (m *Manager) LoadSession(ctx context.Context, sessionID string) error {
+	sc, ok := m.activeBackend().(SessionController)
+	if !ok {
+		return fmt.Errorf("当前后端不支持会话管理")
+	}
+	return sc.LoadSession(ctx, sessionID)
+}
+
+// CurrentSession returns the active session id ("" when none).
+func (m *Manager) CurrentSession() string {
+	sc, ok := m.activeBackend().(SessionController)
+	if !ok {
+		return ""
+	}
+	return sc.CurrentSession()
 }
 
 // Send starts a new turn.
@@ -169,6 +293,7 @@ func (m *Manager) Send(text string) {
 	m.cancel = cancel
 	m.running = true
 	cfg := m.cfg
+	b := m.backendLocked(cfg)
 	m.mu.Unlock()
 
 	m.emit(Event{Kind: KindUser, Text: text})
@@ -182,10 +307,8 @@ func (m *Manager) Send(text string) {
 			m.mu.Unlock()
 			m.emit(Event{Kind: KindDone})
 		}()
-		if cfg.APIKey != "" && cfg.Model != "" {
-			m.runLLM(ctx)
-		} else {
-			m.runLocal(ctx, text)
+		if err := b.Send(ctx, text); err != nil {
+			m.emit(Event{Kind: KindError, Text: err.Error()})
 		}
 	}()
 }

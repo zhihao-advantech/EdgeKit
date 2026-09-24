@@ -112,11 +112,16 @@ func New() *Server {
 	// without the UI (e.g. by an external tool over the WebSocket API).
 	if st := loadSettings(); len(st) > 0 {
 		s.agent.SetConfig(agent.Config{
-			BaseURL: settingString(st, "in-agent-base"),
-			APIKey:  settingString(st, "in-agent-key"),
-			Model:   settingString(st, "in-agent-model"),
-			AutoRun: settingBool(st, "chk-agent-auto"),
-			Target:  settingString(st, "agent-target"),
+			BaseURL:     settingString(st, "in-agent-base"),
+			APIKey:      settingString(st, "in-agent-key"),
+			Model:       settingString(st, "in-agent-model"),
+			AutoRun:     settingBool(st, "chk-agent-auto"),
+			Target:      settingString(st, "agent-target"),
+			Backend:     settingString(st, "agent-backend"),
+			ACPCommand:  settingString(st, "agent-acp-command"),
+			ACPArgs:     settingStrings(st, "agent-acp-args"),
+			ACPOverride: settingBool(st, "agent-acp-override"),
+			ACPModel:    settingString(st, "agent-acp-model"),
 		})
 		s.gate.SetAutoRun(settingBool(st, "chk-agent-auto"))
 		for _, id := range settingStrings(st, "kits.disabled") {
@@ -430,15 +435,20 @@ func (s *Server) Close() error {
 		s.closeSession(id)
 	}
 	s.agent.Cancel()
+	s.agent.Close()
 	runtime.Clear()
 	s.batch.flushAll()
 
 	s.mu.Lock()
+	clients := make([]*client, 0, len(s.clients))
 	for c := range s.clients {
-		close(c.send)
+		clients = append(clients, c)
 	}
 	s.clients = make(map[*client]struct{})
 	s.mu.Unlock()
+	for _, c := range clients {
+		c.close()
+	}
 
 	if s.http != nil {
 		return s.http.Close()
@@ -451,6 +461,42 @@ type client struct {
 	conn *websocket.Conn
 	send chan []byte
 	srv  *Server
+
+	// inbox decouples reading from handling: the reader only enqueues, a single
+	// worker dispatches in order, so a slow handler never blocks the socket.
+	inbox chan message
+	quit  chan struct{}
+
+	mu     sync.Mutex
+	closed bool
+}
+
+// enqueue hands a message to the client's send buffer without blocking. It is a
+// no-op once the client is closed, so it can never send on a closed channel.
+func (c *client) enqueue(b []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	select {
+	case c.send <- b:
+	default:
+		// Slow client: drop rather than block the producer.
+	}
+}
+
+// close shuts the client down exactly once: the send buffer is closed (so
+// writePump exits) and the worker is told to stop.
+func (c *client) close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.closed = true
+	close(c.send)
+	close(c.quit)
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -459,7 +505,13 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("websocket upgrade failed: %v", err)
 		return
 	}
-	c := &client{conn: conn, send: make(chan []byte, 512), srv: s}
+	c := &client{
+		conn:  conn,
+		send:  make(chan []byte, 512),
+		srv:   s,
+		inbox: make(chan message, 1024),
+		quit:  make(chan struct{}),
+	}
 
 	s.mu.Lock()
 	s.clients[c] = struct{}{}
@@ -467,9 +519,22 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("界面已连接 (%s)", r.RemoteAddr)
 	go c.writePump()
+	go c.worker()
 	s.sendStatus(c)
 	c.readPump()
 	log.Printf("界面已断开 (%s)", r.RemoteAddr)
+}
+
+// worker dispatches this client's messages in arrival order, off the read loop.
+func (c *client) worker() {
+	for {
+		select {
+		case <-c.quit:
+			return
+		case msg := <-c.inbox:
+			c.srv.dispatch(c, msg)
+		}
+	}
 }
 
 func (c *client) readPump() {
@@ -488,7 +553,11 @@ func (c *client) readPump() {
 			c.srv.sendError(c, fmt.Errorf("无效消息: %w", err))
 			continue
 		}
-		c.srv.dispatch(c, msg)
+		select {
+		case c.inbox <- msg:
+		case <-c.quit:
+			return
+		}
 	}
 }
 
@@ -517,11 +586,12 @@ func (c *client) writePump() {
 
 func (s *Server) removeClient(c *client) {
 	s.mu.Lock()
-	if _, ok := s.clients[c]; ok {
-		delete(s.clients, c)
-		close(c.send)
-	}
+	_, ok := s.clients[c]
+	delete(s.clients, c)
 	s.mu.Unlock()
+	if ok {
+		c.close()
+	}
 }
 
 // envelope is the outbound message shape.
@@ -536,11 +606,7 @@ func (s *Server) sendTo(c *client, typ string, payload any) {
 	if err != nil {
 		return
 	}
-	select {
-	case c.send <- b:
-	default:
-		// Slow client: drop rather than block the producer.
-	}
+	c.enqueue(b)
 }
 
 func (s *Server) broadcast(typ string, payload any) {
@@ -551,10 +617,7 @@ func (s *Server) broadcast(typ string, payload any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for c := range s.clients {
-		select {
-		case c.send <- b:
-		default:
-		}
+		c.enqueue(b)
 	}
 }
 
@@ -874,6 +937,16 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.agent.Reset()
 	case "agent.approve":
 		s.handleAgentApprove(msg.Payload)
+	case "agent.models":
+		s.handleAgentModels()
+	case "agent.setModel":
+		s.handleAgentSetModel(msg.Payload)
+	case "agent.session.new":
+		s.handleAgentSessionNew()
+	case "agent.session.list":
+		s.emitAgentSessions()
+	case "agent.session.load":
+		s.handleAgentSessionLoad(msg.Payload)
 	case "settings.set":
 		var p map[string]any
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
@@ -933,7 +1006,7 @@ func (s *Server) handleSerialOpen(c *client, raw json.RawMessage) {
 	// Emitted after registration so clients already know the session id.
 	s.onSerialEvent(ds.id, serial.Event{
 		Direction: serial.DirInfo,
-		Data:      []byte(fmt.Sprintf("已打开 %s @ %d %d%s%d", cfg.Port, cfg.Baud, cfg.DataBits, parityChar(cfg.Parity), int(cfg.StopBits))),
+		Data:      []byte(fmt.Sprintf("已打开 %s @ %d %d%s%d", cfg.Port, cfg.Baud, cfg.DataBits, serial.ParityLabel(cfg.Parity), int(cfg.StopBits))),
 		Time:      time.Now(),
 	})
 }
@@ -1104,6 +1177,90 @@ func (s *Server) handleAgentApprove(raw json.RawMessage) {
 		return
 	}
 	s.gate.Approve(p.ID, p.Allow)
+}
+
+// handleAgentModels starts the active backend if needed (the ACP agent process
+// must run before its model list is known) and broadcasts the selectable models.
+func (s *Server) handleAgentModels() {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := s.agent.Prepare(ctx); err != nil {
+		s.broadcast("agent.models", map[string]any{
+			"models": []agent.Model{}, "current": "", "error": err.Error(),
+		})
+		return
+	}
+	s.broadcast("agent.models", map[string]any{
+		"models": s.agent.Models(), "current": s.agent.CurrentModel(),
+	})
+}
+
+// handleAgentSetModel switches the model of the active backend.
+func (s *Server) handleAgentSetModel(raw json.RawMessage) {
+	var p struct {
+		ModelID string `json:"modelId"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	msg := map[string]any{"models": s.agent.Models(), "current": s.agent.CurrentModel()}
+	if err := s.agent.SetModel(ctx, p.ModelID); err != nil {
+		msg["error"] = err.Error()
+	} else {
+		msg["current"] = s.agent.CurrentModel()
+	}
+	s.broadcast("agent.models", msg)
+}
+
+// handleAgentSessionNew opens a fresh conversation without restarting the agent.
+func (s *Server) handleAgentSessionNew() {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	if err := s.agent.NewSession(ctx); err != nil {
+		s.broadcastAgentSessions(nil, err)
+		return
+	}
+	s.emitAgentSessions()
+}
+
+// handleAgentSessionLoad resumes a persisted conversation.
+func (s *Server) handleAgentSessionLoad(raw json.RawMessage) {
+	var p struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil || p.SessionID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	if err := s.agent.LoadSession(ctx, p.SessionID); err != nil {
+		s.broadcastAgentSessions(nil, err)
+		return
+	}
+	s.emitAgentSessions()
+}
+
+// emitAgentSessions lists and broadcasts the agent's persisted sessions.
+func (s *Server) emitAgentSessions() {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	sessions, err := s.agent.ListSessions(ctx)
+	s.broadcastAgentSessions(sessions, err)
+}
+
+// broadcastAgentSessions sends the session list and current id to every client.
+// Backends without session support yield an empty list; err is surfaced inline.
+func (s *Server) broadcastAgentSessions(sessions []agent.SessionInfo, err error) {
+	if sessions == nil {
+		sessions = []agent.SessionInfo{}
+	}
+	payload := map[string]any{"sessions": sessions, "current": s.agent.CurrentSession()}
+	if err != nil {
+		payload["error"] = err.Error()
+	}
+	s.broadcast("agent.sessions", payload)
 }
 
 /* ------------------------------------------------------------------ *
@@ -1477,22 +1634,6 @@ func uniqueName(name string) string {
 			return candidate
 		}
 		candidate = fmt.Sprintf("%s (%d)%s", base, i, ext)
-	}
-}
-
-// parityChar renders a parity name as its single-letter form.
-func parityChar(p string) string {
-	switch strings.ToLower(strings.TrimSpace(p)) {
-	case "odd":
-		return "O"
-	case "even":
-		return "E"
-	case "mark":
-		return "M"
-	case "space":
-		return "S"
-	default:
-		return "N"
 	}
 }
 

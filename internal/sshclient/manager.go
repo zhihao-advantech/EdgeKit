@@ -44,6 +44,12 @@ type Manager struct {
 	stdin   io.WriteCloser
 	shell   bool
 
+	// opMu serializes session lifecycle (Run / StartShell) so the state lock
+	// never has to be held across blocking network I/O.
+	opMu sync.Mutex
+	// writeMu serializes writes to the shell stdin without holding mu.
+	writeMu sync.Mutex
+
 	onEvent func(Event)
 }
 
@@ -124,6 +130,9 @@ func (m *Manager) Disconnect() error {
 
 // Run executes a single command and streams its output as events.
 func (m *Manager) Run(command string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.mu.Lock()
 	if !m.connected || m.client == nil {
 		m.mu.Unlock()
@@ -134,13 +143,17 @@ func (m *Manager) Run(command string) error {
 		return fmt.Errorf("已有会话在运行，请先关闭 Shell")
 	}
 	client := m.client
+	m.mu.Unlock()
+
+	// NewSession is network I/O: do it outside the state lock.
 	session, err := client.NewSession()
 	if err != nil {
-		m.mu.Unlock()
 		return fmt.Errorf("创建会话失败: %w", err)
 	}
 	session.Stdout = eventWriter{emit: m.emit, kind: KindStdout}
 	session.Stderr = eventWriter{emit: m.emit, kind: KindStderr}
+
+	m.mu.Lock()
 	m.session = session
 	m.mu.Unlock()
 
@@ -162,6 +175,9 @@ func (m *Manager) Run(command string) error {
 
 // StartShell requests a PTY and starts an interactive shell.
 func (m *Manager) StartShell(cols, rows int) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.mu.Lock()
 	if !m.connected || m.client == nil {
 		m.mu.Unlock()
@@ -178,9 +194,11 @@ func (m *Manager) StartShell(cols, rows int) error {
 		rows = 30
 	}
 	client := m.client
+	m.mu.Unlock()
+
+	// The whole PTY setup is network I/O: do it outside the state lock.
 	session, err := client.NewSession()
 	if err != nil {
-		m.mu.Unlock()
 		return fmt.Errorf("创建会话失败: %w", err)
 	}
 	modes := ssh.TerminalModes{
@@ -190,22 +208,21 @@ func (m *Manager) StartShell(cols, rows int) error {
 	}
 	if err := session.RequestPty("xterm-256color", rows, cols, modes); err != nil {
 		_ = session.Close()
-		m.mu.Unlock()
 		return fmt.Errorf("申请 PTY 失败: %w", err)
 	}
 	stdin, err := session.StdinPipe()
 	if err != nil {
 		_ = session.Close()
-		m.mu.Unlock()
 		return fmt.Errorf("获取输入管道失败: %w", err)
 	}
 	session.Stdout = eventWriter{emit: m.emit, kind: KindStdout}
 	session.Stderr = eventWriter{emit: m.emit, kind: KindStderr}
 	if err := session.Shell(); err != nil {
 		_ = session.Close()
-		m.mu.Unlock()
 		return fmt.Errorf("启动 Shell 失败: %w", err)
 	}
+
+	m.mu.Lock()
 	m.session = session
 	m.stdin = stdin
 	m.shell = true
@@ -258,12 +275,16 @@ func (m *Manager) CloseShell() error {
 // WriteShell forwards raw bytes to the interactive shell's stdin.
 func (m *Manager) WriteShell(data []byte) error {
 	m.mu.Lock()
-	if !m.shell || m.stdin == nil {
-		m.mu.Unlock()
+	stdin := m.stdin
+	ok := m.shell && stdin != nil
+	m.mu.Unlock()
+	if !ok {
 		return fmt.Errorf("Shell 未打开")
 	}
-	_, err := m.stdin.Write(data)
-	m.mu.Unlock()
+	// Serialize writes without holding the state lock across the network write.
+	m.writeMu.Lock()
+	_, err := stdin.Write(data)
+	m.writeMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("写入 Shell 失败: %w", err)
 	}

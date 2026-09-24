@@ -57,6 +57,37 @@ TRAE 的自定义 Agent 工具开关、WorkBuddy 的 Connectors 同构：
   - 选择持久化到 `~/.config/edgekit/settings.json` 的 `kits.disabled`
 - **归属可见**：对话中的工具卡片标明来自哪个 Kit（如 `Serial · serial_read`）
 
+## Agent 大脑可插拔（内置 / ACP：Hermes、OpenClaw）
+
+Agent 的「大脑」可切换，工具面与审批流程不变：
+
+- **内置**（默认）：OpenAI 兼容的 function-calling 循环；未配置模型时走 Normal 内置流程。
+- **外部 ACP Agent**：以子进程方式启动 `hermes acp` 或 `openclaw acp`，用
+  **ACP（Agent Client Protocol，JSON-RPC 2.0 over stdio）**驱动。
+  EdgeKit 作为 ACP **客户端**，在 `session/new` 时把自己的 `edgekit mcp` 作为
+  stdio MCP server 交给对方，因此外部 Agent 用的仍是已连接的串口 / SSH 会话与同一份
+  Kit 工具，修改性操作照样在 EdgeKit 界面里弹出审批（`session/request_permission`
+  复用 `internal/policy` 策略门）。
+
+切换：左侧「会话设置 → Agent 大脑」下拉选择 `内置 / Hermes / OpenClaw / 自定义 ACP…`，
+自定义时填写完整命令（如 `hermes acp`）。选择持久化到 `~/.config/edgekit/settings.json`。
+
+```
+Agent 面板 ──agent.config{backend, acpCommand, acpArgs}──▶ internal/agent
+   ├── builtin  现 OpenAI 兼容 / Normal 流程
+   └── acp      internal/acp 客户端 ──stdio──▶ hermes acp / openclaw acp
+                        │ session/new{mcpServers:[edgekit mcp]}
+                        ▼
+                   edgekit mcp（复用 Kit Registry + policy 审批）
+```
+
+> 说明：`openclaw acp` 由 Gateway 支撑，需先运行 OpenClaw Gateway；`hermes acp` 可独立运行。
+> 外部 Agent 的模型、记忆、Skills 由各自配置，EdgeKit 的模型面板仅对「内置」生效。
+
+**进程常驻 + 多会话**：`hermes acp` 只懒启动一次，与 EdgeKit 进程同生共死；
+「新会话 / 历史会话」通过 ACP `session/new`、`session/list`、`session/load` 在同一进程上完成，
+不重启 Agent。选择持久化在界面；模型切换走 `session/set_model`，同样不重启。
+
 ## 设备模型与时间线
 
 每一次观测/动作都会进入设备的**时间线**（append-only，带序号与时间戳）。它位于 provider 与消费者之间，
@@ -147,6 +178,7 @@ ln -s "$PWD/skills/edgekit-board-debug" ~/.agents/skills/edgekit-board-debug
   - **AI 模式**：配置 OpenAI 兼容的 Base URL / API Key / 模型后，走 function-calling 循环，
     模型按需调用工具并汇总结果；
   - **Normal 模式**：未配置模型时，用内置流程完成巡检、日志、磁盘、内存、进程、系统版本、ping 等。
+  - **ACP 模式**：把大脑换成外部 Agent（Hermes / OpenClaw），见上节「Agent 大脑可插拔」。
 - **工具集**：`local_info` / `local_exec`（本机）、`net_ping` / `net_check_port` / `net_resolve`、
   `serial_status` / `serial_read` / `serial_write` / `serial_exec`、
   `ssh_status` / `ssh_exec`、`sftp_status` / `sftp_list` / `sftp_download` / `sftp_upload`、
@@ -283,6 +315,7 @@ internal/runtime/       运行端点发布（供 edgekit mcp 发现 App）
 internal/kit/           Kit 扩展模型（Manifest / Tool / Registry / 能力接口）
 internal/kits/          内置 Kit（Host / Network / Serial / SSH / SFTP / Workspace）
 internal/agent/         AI Agent（消费 Registry、Normal 模式、模型调用、审批）
+internal/acp/           最小 ACP 客户端（JSON-RPC 2.0 over stdio）
 internal/netdiag/       网络检查（ping / 端口 / DNS / 本机信息）
 internal/sftpx/         SFTP 文件浏览与传输（挂在 SSH 连接上）
 internal/workspace/     本地工作区（沙箱化文件操作）
@@ -311,9 +344,12 @@ internal/server/web/    内嵌的前端资源（HTML/CSS/JS）
 | | `ssh.shell.resize` | `{cols, rows}` |
 | | `ssh.shell.close` | – |
 | Agent | `agent.send` | `{text}` |
-| | `agent.config` | `{baseUrl, apiKey, model, autoRun}` |
+| | `agent.config` | `{baseUrl, apiKey, model, autoRun, backend: "builtin"\|"acp", acpCommand, acpArgs, acpOverride, acpModel}` |
 | | `agent.approve` | `{id, allow}` |
 | | `agent.cancel` / `agent.reset` | – |
+| | `agent.session.new` | 在常驻 Agent 进程上新建会话 |
+| | `agent.session.list` | → `agent.sessions` 事件 `{sessions, current}` |
+| | `agent.session.load` | `{sessionId}` 恢复历史会话 |
 | 设置 | `settings.set` | 任意键值（持久化到本机配置文件） |
 | 工作区 | `fs.list` | `{side: local\|remote\|serial, path}` |
 | | `fs.mkdir` / `fs.newfile` | `{side, path}` |
@@ -323,7 +359,7 @@ internal/server/web/    内嵌的前端资源（HTML/CSS/JS）
 事件（后端 → 浏览器）：`sessions`（连接快照）、`session.opened` / `session.closed` /
 `session.focus`、`serial.ports`、`serial.status`、`serial.event`、
 `ssh.status`、`ssh.event`、`fs.files`、`fs.done`、
-`agent.event`、`agent.config`、`settings`、`error`。
+`agent.event`、`agent.config`、`agent.models`、`agent.sessions`、`settings`、`error`。
 其中 `serial.status` / `serial.event` / `ssh.status` / `ssh.event` 都带 `sessionId`。
 其中二进制数据统一使用 base64 编码。
 

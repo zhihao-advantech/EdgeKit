@@ -88,6 +88,7 @@
       this.before = null;
       this.after = null;
       this.lineCount = 0;
+      this.lastLine = null;
       this.decoder = new TextDecoder("utf-8", { fatal: false });
       this.state = "text";
       this.seq = "";
@@ -133,10 +134,17 @@
       return span;
     }
     placeCursorAtEnd() {
+      // Keep the cursor after the newest line. Caching the last line avoids
+      // rescanning every child (which was O(n) per line → O(n²) on bursts).
+      if (this.lastLine && this.lastLine.isConnected) {
+        this.lastLine.appendChild(this.cursorEl);
+        return;
+      }
       let last = null;
       for (const child of this.el.children) {
         if (child.classList && child.classList.contains("line")) last = child;
       }
+      this.lastLine = last;
       if (last) last.appendChild(this.cursorEl);
       else this.el.appendChild(this.cursorEl);
     }
@@ -144,6 +152,7 @@
       const span = this.makeSpan(kind, time);
       span.appendChild(document.createTextNode(text));
       this.el.appendChild(span);
+      this.lastLine = span;
       this.lineCount++;
       this.trim();
       this.placeCursorAtEnd();
@@ -156,6 +165,7 @@
       span.appendChild(this.cursorEl);
       span.appendChild(this.after);
       this.el.appendChild(span);
+      this.lastLine = span;
       this.lineCount++;
       this.trim();
       this.active = { kind, chars: [], text: "", col: 0 };
@@ -187,6 +197,7 @@
         const first = this.el.firstChild;
         if (!first || first === this.cursorEl) break;
         this.el.removeChild(first);
+        if (first === this.lastLine) this.lastLine = null;
         this.lineCount--;
       }
     }
@@ -315,7 +326,7 @@
     focusDevice: null,    // device id the agent / workspace target
     devices: new Map(),
     agentOpen: false,
-    agent: { baseUrl: "", apiKey: "", model: "", autoRun: false, target: "remote", running: false, mode: "normal" },
+    agent: { baseUrl: "", apiKey: "", model: "", autoRun: false, target: "remote", running: false, mode: "normal", backend: "builtin", acpCommand: "", acpArgs: [], acpOverride: false, acpModel: "", sessions: [], session: "" },
     ws: {
       sides: ["local"],
       side: "local",
@@ -630,6 +641,8 @@
       case "ssh.event": onSSHEvent(msg.payload || {}); break;
       case "agent.event": onAgentEvent(msg.payload || {}); break;
       case "agent.config": onAgentConfig(msg.payload || {}); break;
+      case "agent.models": onAgentModels(msg.payload || {}); break;
+      case "agent.sessions": onAgentSessions(msg.payload || {}); break;
       case "settings": applySettings(msg.payload); break;
       case "kits":
         state.kits = msg.payload || { kits: [] };
@@ -1130,11 +1143,21 @@
     state.agent.model = cfg.model || "";
     state.agent.autoRun = !!cfg.autoRun;
     state.agent.target = cfg.target === "local" ? "local" : "remote";
+    state.agent.backend = cfg.backend === "acp" ? "acp" : "builtin";
+    state.agent.acpCommand = cfg.acpCommand || "";
+    state.agent.acpArgs = Array.isArray(cfg.acpArgs) ? cfg.acpArgs : [];
+    state.agent.acpOverride = !!cfg.acpOverride;
+    state.agent.acpModel = cfg.acpModel || "";
     $("in-agent-base").value = state.agent.baseUrl;
     $("in-agent-key").value = state.agent.apiKey;
     $("in-agent-model").value = state.agent.model;
     $("chk-agent-auto").checked = state.agent.autoRun;
+    $("chk-agent-acp-override").checked = state.agent.acpOverride;
+    $("sel-agent-backend").value = backendSelectValue();
+    $("in-agent-acp-command").value = acpCommandLine();
+    updateBackendUI();
     setAgentMode();
+    if (state.agent.backend === "acp") refreshAgentAcp();
   }
   function agentConfigPayload() {
     return {
@@ -1143,9 +1166,108 @@
       model: state.agent.model,
       autoRun: state.agent.autoRun,
       target: state.agent.target,
+      backend: state.agent.backend,
+      acpCommand: state.agent.acpCommand,
+      acpArgs: state.agent.acpArgs,
+      acpOverride: state.agent.acpOverride,
+      acpModel: state.agent.acpModel,
     };
   }
   function pushAgentConfig() { send("agent.config", agentConfigPayload()); }
+
+  function acpCommandLine() {
+    return [state.agent.acpCommand, ...(state.agent.acpArgs || [])].filter(Boolean).join(" ");
+  }
+  function backendSelectValue() {
+    if (state.agent.backend !== "acp") return "builtin";
+    const cmd = (state.agent.acpCommand || "").split("/").pop();
+    if (cmd === "hermes") return "hermes";
+    if (cmd === "openclaw") return "openclaw";
+    return "custom";
+  }
+  function readBackendSelection() {
+    const sel = $("sel-agent-backend").value;
+    if (sel === "builtin") {
+      state.agent.backend = "builtin";
+      return;
+    }
+    state.agent.backend = "acp";
+    if (sel === "hermes") { state.agent.acpCommand = "hermes"; state.agent.acpArgs = ["acp"]; }
+    else if (sel === "openclaw") { state.agent.acpCommand = "openclaw"; state.agent.acpArgs = ["acp"]; }
+    else {
+      const parts = $("in-agent-acp-command").value.trim().split(/\s+/).filter(Boolean);
+      state.agent.acpCommand = parts[0] || "";
+      state.agent.acpArgs = parts.slice(1);
+    }
+    state.agent.acpOverride = $("chk-agent-acp-override").checked;
+  }
+  function updateBackendUI() {
+    const acp = state.agent.backend === "acp";
+    $("field-agent-acp-command").classList.toggle("hidden", !acp);
+    $("field-agent-acp-model").classList.toggle("hidden", !acp);
+    $("field-agent-acp-override").classList.toggle("hidden", !acp);
+    $("field-agent-sessions").classList.toggle("hidden", !acp);
+    // Model fields serve the built-in brain, or act as the ACP override.
+    $("agent-builtin-fields").classList.toggle("hidden", acp && !state.agent.acpOverride);
+  }
+  function refreshAgentModels() {
+    if (state.agent.backend !== "acp") return;
+    const sel = $("sel-agent-acp-model");
+    sel.innerHTML = '<option value="">（加载中…）</option>';
+    sel.disabled = true;
+    send("agent.models");
+  }
+  function refreshAgentSessions() {
+    if (state.agent.backend !== "acp") return;
+    send("agent.session.list");
+  }
+  function refreshAgentAcp() {
+    refreshAgentModels();
+    refreshAgentSessions();
+  }
+  function onAgentSessions(payload) {
+    const list = Array.isArray(payload.sessions) ? payload.sessions : [];
+    state.agent.sessions = list;
+    state.agent.session = payload.current || "";
+    const sel = $("sel-agent-session");
+    sel.innerHTML = "";
+    const cur = document.createElement("option");
+    cur.value = state.agent.session;
+    cur.textContent = state.agent.session ? "当前会话 " + state.agent.session.slice(0, 8) : "当前会话";
+    sel.appendChild(cur);
+    for (const s of list) {
+      if (!s.id || s.id === state.agent.session) continue;
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = (s.title || "会话 " + s.id.slice(0, 8)) + (s.updatedAt ? "  ·  " + s.updatedAt : "");
+      sel.appendChild(opt);
+    }
+    sel.value = state.agent.session;
+    if (payload.error) toast("会话列表失败：" + payload.error);
+  }
+  function onAgentModels(payload) {
+    const sel = $("sel-agent-acp-model");
+    const models = Array.isArray(payload.models) ? payload.models : [];
+    const current = payload.current || state.agent.acpModel || "";
+    sel.innerHTML = "";
+    if (!models.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = payload.error ? "（不可用：" + payload.error + "）" : "（Agent 未提供模型列表）";
+      sel.appendChild(opt);
+      sel.disabled = true;
+      return;
+    }
+    for (const m of models) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.name || m.id;
+      if (m.description) opt.title = m.description;
+      sel.appendChild(opt);
+    }
+    if (current) sel.value = current;
+    sel.disabled = false;
+  }
 
   function updateTargetSeg() {
     document.querySelectorAll("#agent-target button").forEach((b) => {
@@ -1168,6 +1290,16 @@
   }
   function setAgentMode() {
     updateTargetSeg();
+    if (state.agent.backend === "acp") {
+      const name = state.agent.acpCommand || "ACP";
+      state.agent.mode = "acp";
+      $("m-agent").textContent = "ACP · " + name;
+      $("sess-agent-sub").textContent = "ACP · " + name;
+      $("agent-hint").textContent = "外部 Agent（" + name + "）通过 ACP 驱动，工具来自 EdgeKit 的 Kits。";
+      updatePill();
+      updateMenuState();
+      return;
+    }
     const ai = !!(state.agent.apiKey && state.agent.model);
     state.agent.mode = ai ? "ai" : "normal";
     $("m-agent").textContent = ai ? "AI 模式" : "Normal 模式";
@@ -1183,9 +1315,12 @@
     state.agent.apiKey = $("in-agent-key").value.trim();
     state.agent.model = $("in-agent-model").value.trim();
     state.agent.autoRun = $("chk-agent-auto").checked;
+    readBackendSelection();
+    updateBackendUI();
     pushAgentConfig();
     setAgentMode();
     persistSettings();
+    if (state.agent.backend === "acp") refreshAgentAcp();
     toast("Agent 配置已保存");
   }
   function agentSend() {
@@ -1222,6 +1357,10 @@
     }
   }
   const agentCards = new Map();
+  function clearAgentChat() {
+    $("agent-chat").textContent = "";
+    agentCards.clear();
+  }
   function appendAgentMessage(role, text) {
     const div = document.createElement("div");
     div.className = "msg " + role;
@@ -1658,6 +1797,11 @@
     data["in-agent-key"] = $("in-agent-key").value;
     data["chk-agent-auto"] = $("chk-agent-auto").checked;
     data["agent-target"] = state.agent.target;
+    data["agent-backend"] = state.agent.backend;
+    data["agent-acp-command"] = state.agent.acpCommand;
+    data["agent-acp-args"] = state.agent.acpArgs;
+    data["agent-acp-override"] = state.agent.acpOverride;
+    data["agent-acp-model"] = state.agent.acpModel;
     data["new-kind"] = newKind;
     return data;
   }
@@ -1678,6 +1822,15 @@
     state.agent.model = $("in-agent-model").value.trim();
     state.agent.autoRun = $("chk-agent-auto").checked;
     state.agent.target = data["agent-target"] === "local" ? "local" : "remote";
+    if (data["agent-backend"] !== undefined) state.agent.backend = data["agent-backend"] === "acp" ? "acp" : "builtin";
+    if (data["agent-acp-command"] !== undefined) state.agent.acpCommand = data["agent-acp-command"] || "";
+    if (Array.isArray(data["agent-acp-args"])) state.agent.acpArgs = data["agent-acp-args"].map(String);
+    if (data["agent-acp-override"] !== undefined) state.agent.acpOverride = !!data["agent-acp-override"];
+    if (data["agent-acp-model"] !== undefined) state.agent.acpModel = data["agent-acp-model"] || "";
+    $("chk-agent-acp-override").checked = state.agent.acpOverride;
+    $("sel-agent-backend").value = backendSelectValue();
+    $("in-agent-acp-command").value = acpCommandLine();
+    updateBackendUI();
     setAgentMode();
     pushAgentConfig();
   }
@@ -1688,6 +1841,39 @@
     }
     $("in-agent-key").addEventListener("change", persistSettings);
     $("chk-agent-auto").addEventListener("change", persistSettings);
+    $("sel-agent-backend").addEventListener("change", (e) => {
+      if (e.target.value === "custom" && !$("in-agent-acp-command").value.trim()) {
+        $("in-agent-acp-command").value = acpCommandLine() || "hermes acp";
+      }
+      readBackendSelection();
+      updateBackendUI();
+      setAgentMode();
+      pushAgentConfig();
+      persistSettings();
+      if (state.agent.backend === "acp") refreshAgentAcp();
+    });
+    $("in-agent-acp-command").addEventListener("change", () => {
+      if ($("sel-agent-backend").value !== "custom") return;
+      readBackendSelection();
+      pushAgentConfig();
+      persistSettings();
+      if (state.agent.backend === "acp") refreshAgentAcp();
+    });
+    $("chk-agent-acp-override").addEventListener("change", () => {
+      readBackendSelection();
+      updateBackendUI();
+      pushAgentConfig();
+      persistSettings();
+      if (state.agent.backend === "acp") refreshAgentAcp();
+    });
+    $("sel-agent-acp-model").addEventListener("change", (e) => {
+      const modelId = e.target.value;
+      if (!modelId) return;
+      state.agent.acpModel = modelId;
+      send("agent.setModel", { modelId });
+      persistSettings();
+      toast("模型已切换");
+    });
   }
 
   /* ------------------------------------------------------------------ *
@@ -1723,9 +1909,19 @@
     });
     $("btn-agent-stop").addEventListener("click", () => send("agent.cancel"));
     $("btn-agent-reset").addEventListener("click", () => {
-      $("agent-chat").textContent = "";
-      agentCards.clear();
+      clearAgentChat();
       send("agent.reset");
+    });
+    $("btn-agent-session-new").addEventListener("click", () => {
+      clearAgentChat();
+      send("agent.session.new");
+    });
+    $("btn-agent-session-refresh").addEventListener("click", refreshAgentSessions);
+    $("sel-agent-session").addEventListener("change", (e) => {
+      const id = e.target.value;
+      if (!id || id === state.agent.session) return;
+      clearAgentChat();
+      send("agent.session.load", { sessionId: id });
     });
     $("btn-agent-save").addEventListener("click", saveAgentConfig);
     $("btn-kits").addEventListener("click", showKits);

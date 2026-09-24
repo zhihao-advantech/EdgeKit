@@ -61,6 +61,10 @@ type Manager struct {
 	recent    []byte
 	capturing bool
 	onEvent   func(Event)
+
+	// writeMu serializes port writes so the state lock is never held across a
+	// blocking device write.
+	writeMu sync.Mutex
 }
 
 // New creates a manager that reports traffic through onEvent. onEvent must be
@@ -133,7 +137,7 @@ func (m *Manager) Open(cfg Config) error {
 
 	m.emit(Event{
 		Direction: DirInfo,
-		Data:      []byte(fmt.Sprintf("已打开 %s @ %d %d%s%d", cfg.Port, cfg.Baud, cfg.DataBits, parityLabel(cfg.Parity), int(cfg.StopBits))),
+		Data:      []byte(fmt.Sprintf("已打开 %s @ %d %d%s%d", cfg.Port, cfg.Baud, cfg.DataBits, ParityLabel(cfg.Parity), int(cfg.StopBits))),
 		Time:      time.Now(),
 	})
 	go m.readLoop(port, done)
@@ -169,8 +173,12 @@ func (m *Manager) Write(data []byte) error {
 		m.mu.Unlock()
 		return fmt.Errorf("serial port is not open")
 	}
-	_, err := m.port.Write(data)
+	port := m.port
 	m.mu.Unlock()
+
+	m.writeMu.Lock()
+	_, err := port.Write(data)
+	m.writeMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
@@ -209,11 +217,16 @@ func (m *Manager) setCapturing(v bool) {
 // writeRaw writes to the port without emitting a TX event.
 func (m *Manager) writeRaw(p []byte) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if !m.open {
+		m.mu.Unlock()
 		return fmt.Errorf("serial port is not open")
 	}
-	_, err := m.port.Write(p)
+	port := m.port
+	m.mu.Unlock()
+
+	m.writeMu.Lock()
+	_, err := port.Write(p)
+	m.writeMu.Unlock()
 	return err
 }
 
@@ -305,7 +318,8 @@ func parseStopBits(v float64) serial.StopBits {
 	}
 }
 
-func parityLabel(s string) string {
+// ParityLabel renders a parity name as its single-letter form.
+func ParityLabel(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "odd":
 		return "O"
