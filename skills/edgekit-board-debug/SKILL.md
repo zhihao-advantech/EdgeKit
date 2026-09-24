@@ -290,7 +290,7 @@ node edgekit-serial.mjs /dev/ttyUSB0
 ```js
 ws.onopen = () => {
   ws.send(JSON.stringify({ type: "ssh.connect", payload: {
-    host: "192.0.2.10", port: 22, user: "root", privateKey: keyPem,
+    host: "192.0.2.10", port: 22, user: "user", privateKey: keyPem,
   }}));
   setTimeout(() => ws.send(JSON.stringify({ type: "ssh.exec", payload: { command: "uname -a; df -h" }})), 1000);
 };

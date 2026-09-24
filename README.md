@@ -1,342 +1,402 @@
 # EdgeKit
 
-**AI 加速端侧设备升级。**
+English · [中文](README.zh-CN.md)
 
-以 **Agent 会话**为中枢，把端侧设备调试与升级所需的手段整合到一个原生桌面应用中：
-AI Agent、串口调试、SSH 终端、工作区文件管理，支持**同时连接多块板**。
+**AI-accelerated edge-device upgrades.**
 
-界面使用 HTML/CSS/JS 编写，**内嵌在可执行文件中**，运行程序即由 **WebKit2GTK**
-（`libwebkit2gtk-4.0`）在原生窗口里直接打开，无需浏览器、无需手动访问任何地址。
-后端由 Go 提供各项能力，二者通过本机回环地址上的 JSON / WebSocket 协议通信。
+An **Agent session** is the hub: it brings everything needed to debug and upgrade
+edge devices into one native desktop app — AI agent, serial console, SSH terminal
+and workspace file management — and can talk to **several boards at once**.
+
+The UI is written in HTML/CSS/JS and **embedded in the executable**. Running the
+program opens it directly in a native window through **WebKit2GTK**
+(`libwebkit2gtk-4.0`) — no browser, no URL to visit. Go provides the backend, and
+the two communicate over a loopback JSON / WebSocket protocol.
 
 ```
 ┌──────────────────────────────────────┐        ┌────────────────────────────────┐
 │  WebView (WebKit2GTK)                │  ws:// │  Go backend                    │
-│  菜单栏 / 会话面板 / 标签页 / Agent  │ <────> │  internal/server               │
-└──────────────────────────────────────┘        │   ├── agent     Agent 中枢     │
-                                                │   ├── serial    串口           │
-                                                │   ├── sshclient SSH 终端       │
-                                                │   ├── sftpx     远端文件       │
-                                                │   ├── workspace 本地工作区     │
-                                                │   └── netdiag   网络检查       │
+│  menu / sessions / tabs / Agent      │ <────> │  internal/server               │
+└──────────────────────────────────────┘        │   ├── agent     agent hub      │
+                                                │   ├── serial    serial         │
+                                                │   ├── sshclient SSH terminal   │
+                                                │   ├── sftpx     remote files   │
+                                                │   ├── workspace local workspace│
+                                                │   └── netdiag   network checks │
                                                 └────────────────────────────────┘
 ```
 
-## Kit 架构
+## Kit architecture
 
-能力以 **Kit**（能力包）形式提供，宿主（Host）聚合各 Kit 贡献的工具，**内置 Agent、UI 协议与后续的 MCP Server 共用同一份定义**：
+Capabilities are provided as **Kits**; the host aggregates the tools each Kit
+contributes, and **the built-in agent, the UI protocol and the future MCP server
+share one single definition**:
 
-- 内置 Kit：`Host`、`Network`、`Serial`、`SSH`、`SFTP`、`Workspace`，共 18 个工具
-- 每个 Kit 带 `Manifest`（`id` / `name` / `version` / `license` / `runtime` / `activation`）
-  与一组 `Tool`（JSON Schema + 风险等级 `read` / `mutate` / `dangerous`）
-- 宿主对非 `read` 工具要求审批（沿用现有 approval 流程）
-- 「帮助 → 关于」可查看已加载的 Kit 与工具统计
+- Built-in Kits: `Host`, `Network`, `Serial`, `SSH`, `SFTP`, `Workspace` — 18 tools in total
+- Each Kit carries a `Manifest` (`id` / `name` / `version` / `license` / `runtime` / `activation`)
+  and a set of `Tool`s (JSON Schema + risk level `read` / `mutate` / `dangerous`)
+- The host requires approval for non-`read` tools (reusing the existing approval flow)
+- "Help → About" shows the loaded Kits and tool counts
 
-代码结构：
+Code layout:
 
 ```
-internal/kit/    Kit / Manifest / Tool / Registry 与能力接口（Serial / SSH / SFTP）
-internal/kits/   内置 Kit 实现，Builtin(deps) 返回全部
-internal/agent/  只消费 kit.Registry，不再硬编码工具
+internal/kit/    Kit / Manifest / Tool / Registry and capability interfaces (Serial / SSH / SFTP)
+internal/kits/   built-in Kit implementations; Builtin(deps) returns them all
+internal/agent/  consumes only kit.Registry, no hard-coded tools
 ```
 
-后续阶段：`kit.json` 外置清单、外置 Kit（协议走 MCP）、Kits 管理页。
+Next phases: external `kit.json` manifests, external Kits over MCP, and a Kits management page.
 
 ## Agent + Kit
 
-EdgeKit 的形态是 **Agent（编排/对话层）+ Kit（能力包）**，与 VS Code 扩展、
-TRAE 的自定义 Agent 工具开关、WorkBuddy 的 Connectors 同构：
+EdgeKit is shaped as **Agent (orchestration/dialogue) + Kit (capability packs)**,
+isomorphic to VS Code extensions, TRAE's per-agent tool toggles and WorkBuddy
+connectors:
 
-- **Kit**：能力包，声明 `Manifest`（`id` / `version` / `license` / `runtime` / `activation`）
-  与一组带风险等级的 `Tool`（`read` / `mutate` / `dangerous`）
-- **Agent**：消费 Kit 的 `Tool`，本身不定义工具；大脑可内置（Normal 宏 / OpenAI 兼容）
-  或外置（MCP → OpenClaw）
-- **启用/禁用**：「工具 → Kits 管理…」或 Agent 面板的「Kits 管理…」
-  - 禁用的 Kit **不向 Agent 与 MCP 暴露工具，也无法执行**（调用返回「未知工具」）
-  - 面板展示每个 Kit 的版本、许可证、激活事件、以及工具与风险等级
-  - 选择持久化到 `~/.config/edgekit/settings.json` 的 `kits.disabled`
-- **归属可见**：对话中的工具卡片标明来自哪个 Kit（如 `Serial · serial_read`）
+- **Kit**: a capability pack declaring a `Manifest`
+  (`id` / `version` / `license` / `runtime` / `activation`) and a set of risk-tagged
+  `Tool`s (`read` / `mutate` / `dangerous`)
+- **Agent**: consumes the Kits' `Tool`s and defines no tools itself; the brain can
+  be built-in (Normal macros / OpenAI-compatible) or external (MCP → OpenClaw)
+- **Enable/disable**: "Tools → Kits…" or "Kits…" in the Agent panel
+  - A disabled Kit **does not expose tools to the agent or MCP and cannot run**
+    (calls return "unknown tool")
+  - The panel shows each Kit's version, license, activation events, tools and risk levels
+  - The choice is persisted to `kits.disabled` in `~/.config/edgekit/settings.json`
+- **Attribution**: tool cards in the transcript show which Kit they came from
+  (e.g. `Serial · serial_read`)
 
-## Agent 大脑可插拔（内置 / ACP：Hermes、OpenClaw）
+## Pluggable agent brain (built-in / ACP: Hermes, OpenClaw)
 
-Agent 的「大脑」可切换，工具面与审批流程不变：
+The agent "brain" can be switched; the tool surface and approval flow stay the same:
 
-- **内置**（默认）：OpenAI 兼容的 function-calling 循环；未配置模型时走 Normal 内置流程。
-- **外部 ACP Agent**：以子进程方式启动 `hermes acp` 或 `openclaw acp`，用
-  **ACP（Agent Client Protocol，JSON-RPC 2.0 over stdio）**驱动。
-  EdgeKit 作为 ACP **客户端**，在 `session/new` 时把自己的 `edgekit mcp` 作为
-  stdio MCP server 交给对方，因此外部 Agent 用的仍是已连接的串口 / SSH 会话与同一份
-  Kit 工具，修改性操作照样在 EdgeKit 界面里弹出审批（`session/request_permission`
-  复用 `internal/policy` 策略门）。
+- **Built-in** (default): an OpenAI-compatible function-calling loop; with no model
+  configured it falls back to the Normal built-in workflows.
+- **External ACP agent**: launches `hermes acp` or `openclaw acp` as a child process
+  and drives it over **ACP (Agent Client Protocol, JSON-RPC 2.0 over stdio)**.
+  EdgeKit acts as the ACP **client** and, at `session/new`, hands the peer its own
+  `edgekit mcp` as a stdio MCP server, so the external agent still uses the connected
+  serial / SSH sessions and the same Kit tools, and mutating calls still raise an
+  approval card in the EdgeKit UI (`session/request_permission` reuses the
+  `internal/policy` gate).
 
-切换：左侧「会话设置 → Agent 大脑」下拉选择 `内置 / Hermes / OpenClaw / 自定义 ACP…`，
-自定义时填写完整命令（如 `hermes acp`）。选择持久化到 `~/.config/edgekit/settings.json`。
+To switch: pick `Built-in / Hermes / OpenClaw / Custom ACP…` in
+"Session settings → Agent brain"; for Custom, enter the full command (e.g.
+`hermes acp`). The choice is persisted to `~/.config/edgekit/settings.json`.
 
 ```
-Agent 面板 ──agent.config{backend, acpCommand, acpArgs}──▶ internal/agent
-   ├── builtin  现 OpenAI 兼容 / Normal 流程
-   └── acp      internal/acp 客户端 ──stdio──▶ hermes acp / openclaw acp
+Agent panel ──agent.config{backend, acpCommand, acpArgs}──▶ internal/agent
+   ├── builtin  current OpenAI-compatible / Normal flow
+   └── acp      internal/acp client ──stdio──▶ hermes acp / openclaw acp
                         │ session/new{mcpServers:[edgekit mcp]}
                         ▼
-                   edgekit mcp（复用 Kit Registry + policy 审批）
+                   edgekit mcp (reuses the Kit Registry + policy gate)
 ```
 
-> 说明：`openclaw acp` 由 Gateway 支撑，需先运行 OpenClaw Gateway；`hermes acp` 可独立运行。
-> 外部 Agent 的模型、记忆、Skills 由各自配置，EdgeKit 的模型面板仅对「内置」生效。
+> Note: `openclaw acp` is backed by the Gateway and needs it running;
+> `hermes acp` runs standalone. The external agent's model, memory and Skills are
+> its own; EdgeKit's model panel only applies to the built-in brain.
 
-**进程常驻 + 多会话**：`hermes acp` 只懒启动一次，与 EdgeKit 进程同生共死；
-「新会话 / 历史会话」通过 ACP `session/new`、`session/list`、`session/load` 在同一进程上完成，
-不重启 Agent。选择持久化在界面；模型切换走 `session/set_model`，同样不重启。
+**Resident process + multiple sessions**: `hermes acp` is lazily started once and
+lives as long as the EdgeKit process; "New session / History" go through ACP
+`session/new`, `session/list` and `session/load` on the same process, without
+restarting the agent. The selection is persisted in the UI; model switching goes
+through `session/set_model`, also without a restart.
 
-## 设备模型与时间线
+## Device model and timeline
 
-每一次观测/动作都会进入设备的**时间线**（append-only，带序号与时间戳）。它位于 provider 与消费者之间，
-是 UI、内置 Agent 与（后续）MCP 共用的**单一事实源**：
+Every observation/action goes into the device's **timeline** (append-only, with
+sequence numbers and timestamps). It sits between providers and consumers and is
+the **single source of truth** shared by the UI, the built-in agent and (later) MCP:
 
-- 位置：`internal/timeline/`
-- API：`Append` / `Since(seq, limit)` / `Wait(ctx, filter, timeout)` / `LastSeq`
-- 宿主为每个设备会话维护一条时间线（上限 5000 条），provider 事件在广播前先落库
-- 用途：**UI 回放**（刷新后恢复滚动内容）、跨通道关联、后续的 `wait_for_output` 与审计
-- 协议：`timeline` 请求 → `timeline.records` 事件（字段 `seq/time/channel/kind/data`）
+- Location: `internal/timeline/`
+- API: `Append` / `Since(seq, limit)` / `Wait(ctx, filter, timeout)` / `LastSeq`
+- The host keeps one timeline per device session (capped at 5000 records); provider
+  events are stored before they are broadcast
+- Uses: **UI replay** (restore scrollback after a reload), cross-channel
+  correlation, the future `wait_for_output`, and auditing
+- Protocol: `timeline` request → `timeline.records` event (fields `seq/time/channel/kind/data`)
 
-## MCP（OpenClaw / Claude Code 接入）
+## MCP (OpenClaw / Claude Code)
 
-EdgeKit 可以作为一个 **MCP 工具服务**被外部 Agent 驱动：`edgekit mcp` 用 stdio 讲 MCP，
-并把每个调用转发给**正在运行的 App**，因此 Agent 用的是你已经连好的串口 / SSH 会话，
-界面里的审批也照常生效。
+EdgeKit can be driven by an external agent as an **MCP tool server**: `edgekit mcp`
+speaks MCP over stdio and forwards every call to the **running app**, so the agent
+uses the serial / SSH sessions you already have connected and the in-app approval
+flow still applies.
 
 ```bash
-# 1) 先启动 App（它会把端点发布到 ~/.config/edgekit/runtime.json）
+# 1) start the app first (it publishes its endpoint to ~/.config/edgekit/runtime.json)
 ./build/edgekit
 
-# 2) 加入 OpenClaw（add 会先连上探活、成功后才保存）
+# 2) add it to OpenClaw (add probes the connection first and only saves on success)
 openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
 openclaw mcp probe edgekit        # -> edgekit: 18 tools
 ```
 
-- 协议：MCP（JSON-RPC 2.0 over stdio），实现 `initialize` / `tools/list` / `tools/call`
-- 工具来自 kit Registry：**只读工具直接执行；修改性工具由 `internal/policy` 策略门
-  在 App 界面弹出审批**，与内置 Agent 走同一道闸
-- 其它 MCP 客户端（Claude Code / Codex CLI / Goose…）同样用 stdio 命令 `edgekit mcp`
-- App 未运行时桥接会明确报错——它复用 App 的会话，不会自己去占用串口
+- Protocol: MCP (JSON-RPC 2.0 over stdio), implementing `initialize` /
+  `tools/list` / `tools/call`
+- Tools come from the Kit Registry: **read-only tools run directly; mutating tools
+  are gated by `internal/policy`, which raises an approval in the app UI** — the
+  same gate the built-in agent uses
+- Other MCP clients (Claude Code / Codex CLI / Goose…) use the same stdio command
+  `edgekit mcp`
+- If the app is not running the bridge reports a clear error — it reuses the app's
+  sessions and never grabs a serial port itself
 
-## Agent 连板调试
+## Agent board debugging
 
-如果要让 Agent（而非人工）用 EdgeKit 做串口 / SSH 连板调试，见
-[`skills/edgekit-board-debug/SKILL.md`](skills/edgekit-board-debug/SKILL.md)：
-包含构建启动、能力清单、内置 Agent 工具、WebSocket 协议速查与典型调试流程。
+To have an agent (rather than a human) use EdgeKit for serial / SSH board
+debugging, see [`skills/edgekit-board-debug/SKILL.md`](skills/edgekit-board-debug/SKILL.md):
+building and launching, the capability list, built-in agent tools, a WebSocket
+protocol cheat sheet and typical debugging flows.
 
-安装为 Agent skill：
+Install it as an agent skill:
 
 ```bash
 ln -s "$PWD/skills/edgekit-board-debug" ~/.agents/skills/edgekit-board-debug
 ```
 
-## 界面
+## UI
 
-整体布局参考 **MobaXterm**：一级菜单栏 + 左侧「会话 / 工作区 / 会话设置」+ 顶部会话标签页 + 黑色终端。
+The layout follows **MobaXterm**: a top menu bar + a left
+"Sessions / Workspace / Session settings" column + session tabs + a black terminal.
 
-- **一级菜单栏**：`会话`、`终端`、`工具`、`视图`、`帮助`，点击展开二级下拉菜单；
-  鼠标移到相邻菜单会自动切换，`Esc` 或点击空白处收起。
-  - `会话`：新建 Agent / 串口 / SSH 会话，关闭当前 / 全部会话
-  - `终端`：自动滚动、时间戳、HEX 显示、本地回显（可勾选项），清空、复制、粘贴
-  - `工具`：刷新串口列表、Agent 设备巡检 / 查看日志
-  - `视图`：显示会话面板 / 工作区、终端字号调整
-  - `帮助`：关于 EdgeKit
-- **左侧「会话」面板**：Agent 会话 + 若干**设备会话**（串口 / SSH，可同时连接多块板，
-  点右上「＋」新建），带状态指示灯，点击切换。
-- **顶部标签**：每个设备会话一个标签，可关闭。
-- **「工作区」面板**（会话与设置之间）：随当前会话切换语义——
-  Agent 跟随执行目标（Local → 本地工作区，Remote → 远端 SFTP），
-  串口显示实验性的设备目录（`ls -la` 抓取），SSH 显示「本地 / 远端」两侧；
-  只要 SSH 已连接，远端在任意会话都可用，可上传下载。
-- **「会话设置」**：随当前会话切换。
-- **会话标签页**：每个会话一个可关闭标签，关闭标签即断开对应连接。
-- **终端区**：黑色终端，底部状态栏显示连接状态与收发字节数。
+- **Menu bar**: `Session`, `Terminal`, `Tools`, `View`, `Help`; click to open a
+  submenu, moving to an adjacent menu switches automatically, `Esc` or a click
+  outside closes it.
+  - `Session`: new Agent / serial / SSH session, close current / all
+  - `Terminal`: auto-scroll, timestamps, HEX view, local echo (checkable), clear, copy, paste
+  - `Tools`: refresh the serial list, agent inspection / view logs
+  - `View`: show/hide the sessions panel and workspace, terminal font size
+  - `Help`: about EdgeKit
+- **Left "Sessions" panel**: the Agent session plus several **device sessions**
+  (serial / SSH; several boards at once, "＋" on the right to add), with status LEDs;
+  click to switch.
+- **Top tabs**: one closable tab per device session.
+- **"Workspace" panel** (between sessions and settings): switches meaning with the
+  current session — the Agent follows the execution target (Local → local workspace,
+  Remote → remote SFTP), serial shows an experimental device directory (captured
+  with `ls -la`), SSH shows both "local / remote" sides; as long as SSH is connected
+  the remote side is available in any session, with upload and download.
+- **"Session settings"**: switches with the current session.
+- **Session tabs**: one closable tab per session; closing a tab disconnects it.
+- **Terminal area**: a black terminal; the status bar at the bottom shows connection
+  state and byte counters.
 
-## 功能
+## Features
 
-### 串口调试
-- 自动枚举串口设备（`/dev/ttyUSB*`、`/dev/ttyACM*`、`/dev/ttyS*`），显示 VID/PID/序列号
-- 可配置波特率、数据位、校验位、停止位
-- 实时收发日志，支持时间戳、自动滚动、HEX 显示
-- 文本显示自动过滤 ANSI 转义序列（跨分片），接收 / 发送字节数统计
+### Serial debugging
+- Enumerates serial devices automatically (`/dev/ttyUSB*`, `/dev/ttyACM*`,
+  `/dev/ttyS*`), showing VID/PID/serial number
+- Configurable baud rate, data bits, parity, stop bits
+- Live RX/TX log with timestamps, auto-scroll and HEX view
+- Text display filters ANSI escape sequences (across chunks), with RX/TX byte counters
 
-### SSH 终端
-- 密码或私钥（PEM / OpenSSH）认证，支持私钥口令
-- 连接成功后自动打开交互式 Shell（申请 PTY，支持窗口尺寸变更）
-- 显示远端主机密钥指纹
+### SSH terminal
+- Password or private-key (PEM / OpenSSH) authentication, with key passphrases
+- Opens an interactive shell on connect (requests a PTY, supports window resizing)
+- Shows the remote host-key fingerprint
 
-### Agent 会话（AI 中枢）
+### Agent session (AI hub)
 
-用自然语言驱动串口 / SSH / 工作区完成调试与升级任务，是 EdgeKit 的核心入口。
+Drives serial / SSH / workspace with natural language to complete debugging and
+upgrade tasks; it is EdgeKit's core entry point.
 
-- **执行目标 Local / Remote**：在左侧「会话信息」面板切换指令作用在哪一侧（默认 **Remote** 远端设备）；
-  Remote 走 SSH（未连则串口），Local 走本机 `local_exec`。Normal 模式的磁盘/内存/日志/巡检按目标分流，
-  AI 模式会把目标写进 system prompt 并允许用户显式覆盖。
-- **两种模式**：
-  - **AI 模式**：配置 OpenAI 兼容的 Base URL / API Key / 模型后，走 function-calling 循环，
-    模型按需调用工具并汇总结果；
-  - **Normal 模式**：未配置模型时，用内置流程完成巡检、日志、磁盘、内存、进程、系统版本、ping 等。
-  - **ACP 模式**：把大脑换成外部 Agent（Hermes / OpenClaw），见上节「Agent 大脑可插拔」。
-- **工具集**：`local_info` / `local_exec`（本机）、`net_ping` / `net_check_port` / `net_resolve`、
-  `serial_status` / `serial_read` / `serial_write` / `serial_exec`、
-  `ssh_status` / `ssh_exec`、`sftp_status` / `sftp_list` / `sftp_download` / `sftp_upload`、
-  `workspace_list` / `workspace_read` / `workspace_write`。
-- **安全确认**：只读工具自动执行；写串口、执行命令、上传文件等**修改性操作会先弹出确认**，
-  用户点「允许执行」后才会运行（可勾选「自动执行修改性操作」跳过确认）。
-- **上下文感知**：Agent 知道当前串口 / SSH 是否已连接及目标，直接复用已建立的会话，下载落到本地工作区。
-- **快捷指令**：设备巡检 / 系统日志 / 磁盘 / 内存 / 系统版本。
-- 会话记录、工具调用与结果都会以对话卡片形式保留在面板中。
+- **Execution target Local / Remote**: switch in the left "Session info" panel which
+  side commands act on (default **Remote**, the remote device); Remote goes over SSH
+  (or serial if not connected), Local uses `local_exec`. In Normal mode
+  disk/memory/logs/inspection follow the target; in AI mode the target is written
+  into the system prompt and can be overridden explicitly.
+- **Modes**:
+  - **AI mode**: with an OpenAI-compatible Base URL / API Key / model configured,
+    runs a function-calling loop where the model calls tools as needed and
+    summarises the results;
+  - **Normal mode**: with no model configured, uses built-in workflows for
+    inspection, logs, disk, memory, processes, system version, ping, etc.;
+  - **ACP mode**: swaps the brain for an external agent (Hermes / OpenClaw), see
+    "Pluggable agent brain" above.
+- **Tool set**: `local_info` / `local_exec` (local), `net_ping` / `net_check_port` /
+  `net_resolve`, `serial_status` / `serial_read` / `serial_write` / `serial_exec`,
+  `ssh_status` / `ssh_exec`, `sftp_status` / `sftp_list` / `sftp_download` /
+  `sftp_upload`, `workspace_list` / `workspace_read` / `workspace_write`.
+- **Approval**: read-only tools run automatically; **mutating operations** such as
+  writing to serial, running commands or uploading files **prompt first**, and only
+  run after "Allow" (tick "Auto-run mutating operations" to skip the prompt).
+- **Context aware**: the agent knows whether serial / SSH is connected and the
+  target, reuses established sessions, and downloads land in the local workspace.
+- **Shortcuts**: device inspection / system logs / disk / memory / system version.
+- Transcript, tool calls and results are kept in the panel as chat cards.
 
-> 网络诊断（ping / 端口 / DNS）不再是独立会话，已并入 Agent 工具，也可直接在 SSH 终端里执行。
+> Network diagnostics (ping / port / DNS) are no longer a separate session; they
+> are part of the agent tools and can also be run directly in the SSH terminal.
 
-### 工作区（文件面板）
+### Workspace (file panel)
 
-不再是独立会话，而是常驻左侧、随当前会话切换语义的文件面板：
+No longer a separate session but a persistent left-hand file panel that changes
+meaning with the current session:
 
-- **本地**：`~/EdgeKit/workspace` 沙箱目录（路径越界会被限制在根内），Agent 也以此为准；
-- **远端**：SSH 连接后自动建立 SFTP（复用同一条 SSH 连接，无需单独凭据），
-  支持进入子目录 / 返回上级；
-- **串口**：向设备发送 `ls -la` 抓取目录（实验性，依赖设备侧 shell）；
-- 工具条：上传、下载、刷新、新建文件夹、新建文件、删除、编辑（文本文件在线编辑）；
-  单栏列表显示名称与大小，状态区显示条目数 / 选中项；
-- 单文件传输上限 16 MiB。
+- **Local**: a sandbox at `~/EdgeKit/workspace` (path traversal is confined to the
+  root); the agent uses it too;
+- **Remote**: an SFTP subsystem is created automatically after SSH connects
+  (reusing the same SSH connection, no separate credentials), with
+  enter-directory / go-up;
+- **Serial**: sends `ls -la` to the device to capture the directory (experimental,
+  relies on the device shell);
+- Toolbar: upload, download, refresh, new folder, new file, delete, edit (in-place
+  text editing); a single list shows name and size, the status area shows entry
+  count / selection;
+- Single-file transfer limit 16 MiB.
 
-> 串口是裸字节流，本身没有文件协议，因此「串口」侧仅做 `ls` 抓取，不提供文件传输。
+> Serial is a raw byte stream with no file protocol, so the "serial" side only does
+> an `ls` capture and offers no file transfer.
 
-### 终端输入（PuTTY / MobaXterm 风格）
+### Terminal input (PuTTY / MobaXterm style)
 
-终端本身就是收 / 发缓冲区，**点击终端后直接键盘输入**，没有单独的发送栏：
+The terminal is itself the RX/TX buffer — **click it and type directly**, there is
+no separate send bar:
 
-- 可打印字符、`Enter`（`\r`）、`Backspace`（`0x7F`）、`Tab`、`Esc` 直接下发；
-- 方向键 / Home / End / Delete / PgUp / PgDn 发送对应 ANSI 序列，远端历史与行编辑可用；
-- `Ctrl+A`~`Ctrl+Z` 发送控制字符（如 `Ctrl+C` 中断），`Alt+<键>` 发送 `ESC` 前缀；
-- `Ctrl+Shift+C` 复制、`Ctrl+Shift+V` 粘贴，也支持系统粘贴事件；
-- 终端末尾显示块状光标，未聚焦时为空心框；
-- 串口设备通常会回显，若设备不回显可勾选「终端 → 本地回显」。
+- Printable characters, `Enter` (`\r`), `Backspace` (`0x7F`), `Tab`, `Esc` are sent as-is;
+- Arrow keys / Home / End / Delete / PgUp / PgDn send the corresponding ANSI
+  sequences, so remote history and line editing work;
+- `Ctrl+A`–`Ctrl+Z` send control characters (e.g. `Ctrl+C` to interrupt),
+  `Alt+<key>` sends the `ESC` prefix;
+- `Ctrl+Shift+C` copies, `Ctrl+Shift+V` pastes; system paste events are supported too;
+- A block cursor is shown at the end of the terminal, hollow when unfocused;
+- Serial devices usually echo; if a device does not, tick "Terminal → Local echo".
 
-显示端采用**面向行的终端模型**（见下），而不是逐块删除转义字符：
+The display uses a **line-oriented terminal model** (below) rather than stripping
+escape characters chunk by chunk:
 
-- 远端回显的退格（`\b` / `0x7F`）、回车重绘（`\r`）、行内擦除（CSI `K`）、
-  光标左右移动（CSI `C`/`D`/`G`）都会被正确解析，命令行编辑不再出现乱码；
-- 跨串口分片到达的转义序列由持久状态机缓存拼接，不受分片边界影响；
-- 屏幕擦除（CSI `J`）与颜色（CSI `m`）暂不处理，以保留滚动日志。
+- Remote-echoed backspace (`\b` / `0x7F`), carriage-return redraw (`\r`), in-line
+  erase (CSI `K`) and cursor left/right (CSI `C`/`D`/`G`) are parsed correctly, so
+  line editing no longer garbles;
+- Escape sequences split across serial chunks are stitched by a persistent state
+  machine, independent of chunk boundaries;
+- Screen erase (CSI `J`) and colour (CSI `m`) are not handled yet, to preserve the
+  scrollback log.
 
-> 说明：该模型覆盖 shell 行编辑、串口日志等常见场景；若要完整支持 `vim`、
-> `top` 这类全屏程序，需要引入 xterm.js 之类的完整终端模拟器。
+> Note: this model covers shell line editing and serial logs. Full-screen programs
+> such as `vim` or `top` would need a complete terminal emulator like xterm.js.
 
-## 性能设计
+## Performance design
 
-高吞吐场景（高速串口、SSH 刷屏日志）下做了两层优化：
+Two layers of optimisation for high-throughput cases (fast serial, SSH log floods):
 
-**后端：数据合批**
-- 串口 / SSH 的数据事件按 `(通道, 方向)` 聚合，每 **12ms** 或累计 **32KB** 触发一次下发，
-  把大量碎片小包合并成一条 WebSocket 消息；
-- 日志 / 生命周期事件（已打开、错误等）不做合批，且会**先冲刷同通道的待发数据**，
-  保证顺序不乱；
-- 效果：115200 波特率、按字节投递（约 11520 次/秒）时，下发消息数从
-  **11520/s 降到约 83/s**（`go test ./internal/server -bench Batcher` 可复现）。
+**Backend: batching**
+- Serial / SSH data events are aggregated per `(channel, direction)` and flushed
+  every **12 ms** or at **32 KB**, collapsing many tiny packets into one WebSocket
+  message;
+- Log / lifecycle events (opened, errors, …) are not batched and **flush the
+  channel's pending data first**, preserving order;
+- Effect: at 115200 baud with byte-at-a-time delivery (~11520/s), downstream
+  messages drop from **11520/s to ~83/s** (reproducible with
+  `go test ./internal/server -bench Batcher`).
 
-**前端：行缓冲 + 帧内合并**
-- 当前行用**增量字符串**维护：追加是摊还 O(1)，只有行内覆盖（退格/回车重绘）才做切片，
-  避免逐字符 `join()` 造成的 O(n²)；
-- 活动行的 DOM 写入与滚动用 `requestAnimationFrame` **合并到每帧一次**，
-  无论一帧内到达多少字节都只更新一次 DOM。
+**Frontend: line buffering + per-frame coalescing**
+- The current line uses an **incremental string**: appends are amortised O(1), and
+  only in-line overwrites (backspace / carriage-return redraw) slice, avoiding the
+  O(n²) of per-character `join()`;
+- Active-line DOM writes and scrolling are coalesced to once per frame with
+  `requestAnimationFrame`, so no matter how many bytes arrive in a frame the DOM is
+  updated once.
 
-实测（Node 纯字符串处理，见下表）：
+Measured (Node, pure string handling):
 
-| 场景 | 逐块字符串拼接 | 逐字符 join+slice | 当前增量模型 |
+| Case | Per-chunk concat | Per-char join+slice | Current incremental model |
 | --- | --- | --- | --- |
-| 20KB 单行，1 字节/块 | 5.6 ms | 1011 ms | **0.9 ms** |
-| 1MB，64 字符/行 | 0.7 ms | 8109 ms | **0.7 ms** |
+| 20 KB single line, 1 byte/chunk | 5.6 ms | 1011 ms | **0.9 ms** |
+| 1 MB, 64 chars/line | 0.7 ms | 8109 ms | **0.7 ms** |
 
-> 合批会引入最多约 12ms 的显示延迟，对串口监视与 SSH 交互无感知影响。
+> Batching adds at most ~12 ms of display latency, imperceptible for serial
+> monitoring and SSH interaction.
 
-## 环境要求
+## Requirements
 
 - Go 1.22+
-- GTK 3 与 WebKit2GTK 4.0 开发库：
+- GTK 3 and WebKit2GTK 4.0 development libraries:
 
 ```bash
 sudo apt update
 sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-dev
 ```
 
-串口访问权限（把当前用户加入 `dialout` 组后重新登录）：
+Serial access (add your user to the `dialout` group, then log in again):
 
 ```bash
 sudo usermod -aG dialout "$USER"
 ```
 
-## 构建与运行
+## Build and run
 
 ```bash
-make build          # 生成 build/edgekit
-./build/edgekit     # 直接打开界面窗口
+make build          # produces build/edgekit
+./build/edgekit     # opens the window directly
 
 make run            # go run
 ```
 
-命令行参数：
+Command-line flags:
 
-| 参数 | 说明 |
+| Flag | Description |
 | --- | --- |
-| `-addr` | 内部 WebSocket 监听地址，默认 `127.0.0.1:0`（随机端口，仅供界面通信） |
-| `-debug` | 打开 WebView 开发者工具 |
+| `-addr` | internal WebSocket listen address, default `127.0.0.1:0` (random port, UI only) |
+| `-debug` | open the WebView developer tools |
 
-运行后会直接弹出应用窗口，界面资源全部内嵌，不依赖浏览器或外部文件。
-需要在图形环境下运行（X11 / Wayland）。
+Running it pops up the app window; all UI assets are embedded, so no browser or
+external files are needed. A graphical environment (X11 / Wayland) is required.
 
-## 关于链接错误 `GLIBCXX_3.4.30`
+## About the `GLIBCXX_3.4.30` link error
 
-部分发行版的 `libwebkit2gtk-4.0` 使用较新的 GCC 构建，而默认 `g++` 搜索路径中的
-`libstdc++` 较旧，链接时会报：
+Some distributions build `libwebkit2gtk-4.0` with a newer GCC while the `libstdc++`
+in the default `g++` search path is older, which fails the link with:
 
 ```
 undefined reference to `std::condition_variable::wait(...)@GLIBCXX_3.4.30'
 ```
 
-`Makefile` 已内置处理：在 `build/.libstdcxx/` 下创建指向运行时 `libstdc++.so.6` 的
-软链接，并通过 `CGO_LDFLAGS=-L...` 让链接器优先使用它，无需修改系统文件。
-若使用 `go build` 而非 `make`，请自行传入相同的 `CGO_LDFLAGS`。
+The `Makefile` handles this already: it creates a symlink under `build/.libstdcxx/`
+to the runtime `libstdc++.so.6` and passes `CGO_LDFLAGS=-L...` so the linker prefers
+it — no system files are touched. If you use `go build` instead of `make`, pass the
+same `CGO_LDFLAGS` yourself.
 
-## 目录结构
+## Directory layout
 
 ```
-cmd/edgekit/            程序入口，创建 WebView 并加载本地服务
-internal/serial/        串口管理器（枚举 / 打开 / 读写）
-internal/sshclient/     SSH 终端（连接 / exec / 交互式 Shell）
-internal/sshutil/       SSH 连接参数与拨号（sshclient 与 sftpx 共用）
-internal/timeline/      设备时间线（append-only 记录，UI/Agent/MCP 共用）
-internal/policy/        审批策略门（read / mutate / dangerous）
-internal/mcp/           最小 MCP server（JSON-RPC 2.0 over stdio）
-internal/runtime/       运行端点发布（供 edgekit mcp 发现 App）
-internal/kit/           Kit 扩展模型（Manifest / Tool / Registry / 能力接口）
-internal/kits/          内置 Kit（Host / Network / Serial / SSH / SFTP / Workspace）
-internal/agent/         AI Agent（消费 Registry、Normal 模式、模型调用、审批）
-internal/acp/           最小 ACP 客户端（JSON-RPC 2.0 over stdio）
-internal/netdiag/       网络检查（ping / 端口 / DNS / 本机信息）
-internal/sftpx/         SFTP 文件浏览与传输（挂在 SSH 连接上）
-internal/workspace/     本地工作区（沙箱化文件操作）
-internal/server/        HTTP + WebSocket 服务，连接前后端
-internal/server/web/    内嵌的前端资源（HTML/CSS/JS）
+cmd/edgekit/            entry point: creates the WebView and loads the local server
+internal/serial/        serial manager (enumerate / open / read / write)
+internal/sshclient/     SSH terminal (connect / exec / interactive shell)
+internal/sshutil/       SSH connection params and dialing (shared by sshclient and sftpx)
+internal/timeline/      device timeline (append-only records, shared by UI/Agent/MCP)
+internal/policy/        approval gate (read / mutate / dangerous)
+internal/mcp/           minimal MCP server (JSON-RPC 2.0 over stdio)
+internal/runtime/       runtime endpoint publishing (so `edgekit mcp` finds the app)
+internal/kit/           Kit extension model (Manifest / Tool / Registry / capability interfaces)
+internal/kits/          built-in Kits (Host / Network / Serial / SSH / SFTP / Workspace)
+internal/agent/         AI agent (consumes the Registry, Normal mode, model calls, approval)
+internal/acp/           minimal ACP client (JSON-RPC 2.0 over stdio)
+internal/netdiag/       network checks (ping / port / DNS / local info)
+internal/sftpx/         SFTP browsing and transfer (attached to an SSH connection)
+internal/workspace/     local workspace (sandboxed file operations)
+internal/server/        HTTP + WebSocket service, connecting frontend and backend
+internal/server/web/    embedded frontend assets (HTML/CSS/JS)
 ```
 
-## WebSocket 协议
+## WebSocket protocol
 
-请求（浏览器 → 后端）：
+Requests (browser → backend):
 
-所有设备相关请求都带 `sessionId`（连接时返回，多路会话用它区分）。
+Every device-related request carries `sessionId` (returned on connect; used to tell
+multiplexed sessions apart).
 
-| 分组 | type | payload |
+| Group | type | payload |
 | --- | --- | --- |
-| 会话 | `session.focus` / `session.close` | `sessionId` |
-| 串口 | `serial.list` | – |
-| | `serial.open` | `{port, baud, dataBits, parity, stopBits}` → 新建会话 |
+| Session | `session.focus` / `session.close` | `sessionId` |
+| Serial | `serial.list` | – |
+| | `serial.open` | `{port, baud, dataBits, parity, stopBits}` → new session |
 | | `serial.close` | `sessionId` |
 | | `serial.write` | `{data, hex}` + `sessionId` |
-| SSH | `ssh.connect` | `{host, port, user, password, privateKey, passphrase}` → 新建会话 |
+| SSH | `ssh.connect` | `{host, port, user, password, privateKey, passphrase}` → new session |
 | | `ssh.disconnect` | `sessionId` |
 | | `ssh.exec` | `{command}` |
 | | `ssh.shell.start` | `{cols, rows}` |
@@ -347,32 +407,37 @@ internal/server/web/    内嵌的前端资源（HTML/CSS/JS）
 | | `agent.config` | `{baseUrl, apiKey, model, autoRun, backend: "builtin"\|"acp", acpCommand, acpArgs, acpOverride, acpModel}` |
 | | `agent.approve` | `{id, allow}` |
 | | `agent.cancel` / `agent.reset` | – |
-| | `agent.session.new` | 在常驻 Agent 进程上新建会话 |
-| | `agent.session.list` | → `agent.sessions` 事件 `{sessions, current}` |
-| | `agent.session.load` | `{sessionId}` 恢复历史会话 |
-| 设置 | `settings.set` | 任意键值（持久化到本机配置文件） |
-| 工作区 | `fs.list` | `{side: local\|remote\|serial, path}` |
+| | `agent.session.new` | new session on the resident agent process |
+| | `agent.session.list` | → `agent.sessions` event `{sessions, current}` |
+| | `agent.session.load` | `{sessionId}` resume a past session |
+| Settings | `settings.set` | arbitrary key/value (persisted to the local config file) |
+| Workspace | `fs.list` | `{side: local\|remote\|serial, path}` |
 | | `fs.mkdir` / `fs.newfile` | `{side, path}` |
-| | `fs.upload` | `{dir, name, data}`（本地 → 远端） |
-| | `fs.download` | `{path}`（远端 → 本地工作区） |
+| | `fs.upload` | `{dir, name, data}` (local → remote) |
+| | `fs.download` | `{path}` (remote → local workspace) |
 
-事件（后端 → 浏览器）：`sessions`（连接快照）、`session.opened` / `session.closed` /
-`session.focus`、`serial.ports`、`serial.status`、`serial.event`、
-`ssh.status`、`ssh.event`、`fs.files`、`fs.done`、
-`agent.event`、`agent.config`、`agent.models`、`agent.sessions`、`settings`、`error`。
-其中 `serial.status` / `serial.event` / `ssh.status` / `ssh.event` 都带 `sessionId`。
-其中二进制数据统一使用 base64 编码。
+Events (backend → browser): `sessions` (connect snapshot), `session.opened` /
+`session.closed` / `session.focus`, `serial.ports`, `serial.status`, `serial.event`,
+`ssh.status`, `ssh.event`, `fs.files`, `fs.done`, `agent.event`, `agent.config`,
+`agent.models`, `agent.sessions`, `settings`, `error`. `serial.status` /
+`serial.event` / `ssh.status` / `ssh.event` all carry `sessionId`. Binary data is
+base64-encoded throughout.
 
-## 安全说明
+## Security notes
 
-- SSH 主机密钥不做校验，仅打印指纹，便于调试内网设备；请勿用于不可信网络。
-- 内部 WebSocket 仅监听回环地址，供本机 WebView 使用，不对局域网开放。
-- Agent 的修改性工具默认需要用户逐次确认；「自动执行」会跳过确认，请谨慎开启。
-- 界面设置（含 API Key）保存在 `~/.config/edgekit/settings.json`（权限 0600）。
+- SSH host keys are not verified, only their fingerprints are printed, to ease
+  debugging on intranet devices; do not use on untrusted networks.
+- The internal WebSocket listens on loopback only, for the local WebView; it is not
+  exposed to the LAN.
+- The agent's mutating tools require per-call confirmation by default; "auto-run"
+  skips it, so enable it carefully.
+- UI settings (including the API Key) are stored in
+  `~/.config/edgekit/settings.json` (mode 0600).
 
-## 许可证
+## License
 
-EdgeKit 以 **Apache License 2.0** 开源，全文见 [LICENSE](LICENSE)。
+EdgeKit is open source under the **Apache License 2.0**; see [LICENSE](LICENSE) for
+the full text.
 
 ```
 Copyright 2026 EdgeKit contributors
@@ -384,9 +449,12 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 ```
 
-每个 Kit 自带 `license` 字段；外置 Kit 将以独立进程（MCP）接入，各自独立授权。
+Each Kit carries its own `license` field; external Kits will attach as separate
+processes (MCP) and keep their own license.
 
-## 路线图
+## Roadmap
 
-EdgeKit 定位为 AI 加速端侧设备升级。当前版本先完成通用调试手段，
-后续将逐步加入：AI 辅助故障诊断与日志分析、设备自动发现、批量运维与智能编排。
+EdgeKit aims to accelerate edge-device upgrades with AI. This version covers the
+general debugging toolbox; upcoming work includes AI-assisted fault diagnosis and
+log analysis, automatic device discovery, and batch operations with intelligent
+orchestration.
