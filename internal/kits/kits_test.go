@@ -16,8 +16,8 @@ func buildRegistry() *kit.Registry {
 
 func TestBuiltinKitsContributeTools(t *testing.T) {
 	reg := buildRegistry()
-	if got := len(reg.Tools()); got != 20 {
-		t.Fatalf("expected 20 tools from the built-in kits, got %d", got)
+	if got := len(reg.Tools()); got != 22 {
+		t.Fatalf("expected 22 tools from the built-in kits, got %d", got)
 	}
 	if got := len(reg.Manifests()); got != 7 {
 		t.Fatalf("expected 7 kits, got %d", got)
@@ -44,7 +44,7 @@ func TestManifestsAreWellFormed(t *testing.T) {
 
 func TestToolRiskClassification(t *testing.T) {
 	reg := buildRegistry()
-	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "sftp_download", "workspace_write", "code_patch"}
+	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "sftp_download", "workspace_write", "code_patch", "code_deploy", "code_run"}
 	for _, name := range mutating {
 		tool, ok := reg.Tool(name)
 		if !ok {
@@ -82,7 +82,7 @@ func TestRegistryIgnoresDuplicateToolNames(t *testing.T) {
 
 func TestKitActivation(t *testing.T) {
 	reg := buildRegistry()
-	const all = 20
+	const all = 22
 	if got := len(reg.Tools()); got != all {
 		t.Fatalf("all kits enabled should expose %d tools, got %d", all, got)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"edgekit/internal/kit"
 	"edgekit/internal/workspace"
@@ -12,7 +13,10 @@ import (
 // codeEditKit contributes patch-based code editing tools for the closed-loop
 // debugging workflow: the agent proposes a change (with hypothesis and verify
 // command), the user reviews it in an experiment card, then it is applied.
-type codeEditKit struct{}
+type codeEditKit struct {
+	sftp kit.SFTP
+	ssh  kit.SSH
+}
 
 func (codeEditKit) Manifest() kit.Manifest {
 	return kit.Manifest{
@@ -26,7 +30,7 @@ func (codeEditKit) Manifest() kit.Manifest {
 	}
 }
 
-func (codeEditKit) Tools() []kit.Tool {
+func (k codeEditKit) Tools() []kit.Tool {
 	return []kit.Tool{
 		{
 			Name:        "code_patch",
@@ -84,6 +88,62 @@ func (codeEditKit) Tools() []kit.Tool {
 
 				oldContent, _ := workspace.Read(path)
 				return workspace.SimpleDiff(string(oldContent), content), nil
+			},
+		},
+		{
+			Name:        "code_deploy",
+			Description: "推送本地工作区文件到板端（SFTP）",
+			Risk:        kit.RiskMutate,
+			Schema: obj(map[string]any{
+				"path":   strType(),
+				"target": strType(),
+			}, "path", "target"),
+			Call: func(ctx context.Context, args map[string]any) (string, error) {
+				path := argString(args, "path")
+				target := argString(args, "target")
+				if path == "" || target == "" {
+					return "", fmt.Errorf("path 和 target 不能为空")
+				}
+				if k.sftp == nil || !k.sftp.IsConnected() {
+					return "", fmt.Errorf("SFTP 未连接（请先连接 SSH）")
+				}
+				data, err := workspace.Read(path)
+				if err != nil {
+					return "", err
+				}
+				if err := k.sftp.Upload(target, data); err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("已部署 %s → %s（%d 字节）", path, target, len(data)), nil
+			},
+		},
+		{
+			Name:        "code_run",
+			Description: "在板端运行命令并返回结构化结果（exit code + output + timing）",
+			Risk:        kit.RiskMutate,
+			Schema: obj(map[string]any{
+				"command": strType(),
+			}, "command"),
+			Call: func(ctx context.Context, args map[string]any) (string, error) {
+				command := argString(args, "command")
+				if command == "" {
+					return "", fmt.Errorf("command 不能为空")
+				}
+				if k.ssh == nil || !k.ssh.IsConnected() {
+					return "", fmt.Errorf("SSH 未连接")
+				}
+				start := time.Now()
+				out, err := k.ssh.ExecCapture(command, 64*1024)
+				duration := time.Since(start)
+				if err != nil {
+					return "", err
+				}
+				exitCode := 0
+				if strings.Contains(out, "(exit:") {
+					exitCode = 1
+				}
+				return fmt.Sprintf("exit_code: %d\nduration: %s\noutput:\n%s",
+					exitCode, duration.Round(time.Millisecond), out), nil
 			},
 		},
 	}

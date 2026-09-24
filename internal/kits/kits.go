@@ -21,7 +21,7 @@ func Builtin(deps kit.Deps) []kit.Kit {
 		sshKit{deps.SSH},
 		sftpKit{deps.SFTP},
 		workspaceKit{},
-		codeEditKit{},
+		codeEditKit{deps.SFTP, deps.SSH},
 	}
 }
 
