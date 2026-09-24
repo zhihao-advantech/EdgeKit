@@ -422,6 +422,8 @@ select { cursor: pointer; }
 .seg-block { display: flex; width: 100%; }
 .seg-block button { flex: 1; padding: 6px 0; font-size: 12px; }
 .iconbtn.danger:hover:not(:disabled) { color: var(--red); border-color: #d9a2a2; }
+.iconbtn.accent { color: #6d4bd0; }
+.iconbtn.accent:hover:not(:disabled) { color: #5a3ab0; border-color: #b9a2d9; }
 #modal-editor { width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
 
 .workspace {

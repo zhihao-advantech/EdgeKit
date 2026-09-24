@@ -487,6 +487,12 @@
       ds.desktopMsg.textContent = "连接失败：" + e;
     }
   }
+  function onCodeResult(p) {
+    $("result-title").textContent = p.tool === "code_deploy" ? "部署结果" : "运行结果";
+    $("result-body").textContent = p.result || "（无结果）";
+    $("result-modal").classList.add("show");
+  }
+
   // The host keeps an append-only timeline per device; ask for the tail of it.
   function requestTimeline(ds) {
     send("timeline", { limit: 3000 }, ds.id);
@@ -726,6 +732,7 @@
       case "agent.config": onAgentConfig(msg.payload || {}); break;
       case "agent.models": onAgentModels(msg.payload || {}); break;
       case "agent.sessions": onAgentSessions(msg.payload || {}); break;
+      case "code.result": onCodeResult(msg.payload || {}); break;
       case "settings": applySettings(msg.payload); break;
       case "kits":
         state.kits = msg.payload || { kits: [] };
@@ -2032,6 +2039,23 @@
     $("ws-download").addEventListener("click", wsDownload);
     $("ws-delete").addEventListener("click", wsDelete);
     $("ws-edit").addEventListener("click", wsEdit);
+    $("ws-deploy").addEventListener("click", () => {
+      const sel = state.ws.selected;
+      if (!sel || sel.isDir) { toast("请先选择一个文件"); return; }
+      const path = joinSidePath(wsCurrentPath(), sel.name);
+      askText("部署到板端", "目标路径").then((target) => {
+        if (!target) return;
+        send("code.deploy", { path, target });
+      });
+    });
+    $("ws-run").addEventListener("click", () => {
+      askText("在板端运行", "命令").then((command) => {
+        if (!command) return;
+        send("code.run", { command });
+      });
+    });
+    $("result-close").addEventListener("click", () => $("result-modal").classList.remove("show"));
+    $("result-modal").addEventListener("click", (e) => { if (e.target === $("result-modal")) $("result-modal").classList.remove("show"); });
     $("ws-file").addEventListener("change", (e) => {
       const file = e.target.files && e.target.files[0];
       if (file) wsUploadFile(file);

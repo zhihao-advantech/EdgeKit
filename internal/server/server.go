@@ -720,6 +720,52 @@ func (s *Server) handleDesktopOpen(c *client, msg message) {
 	s.startDesktop(c, ssh, p.Display)
 }
 
+// handleCodeDeploy pushes a workspace file to the board over SFTP (user-initiated).
+func (s *Server) handleCodeDeploy(c *client, raw json.RawMessage) {
+	var p struct {
+		Path   string `json:"path"`
+		Target string `json:"target"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	tool, ok := s.kits.Tool("code_deploy")
+	if !ok {
+		s.sendError(c, fmt.Errorf("code_deploy 不可用"))
+		return
+	}
+	result, err := tool.Call(context.Background(), map[string]any{"path": p.Path, "target": p.Target})
+	if err != nil {
+		s.sendError(c, err)
+		return
+	}
+	s.sendTo(c, "code.result", map[string]any{"tool": "code_deploy", "result": result})
+}
+
+// handleCodeRun runs a command on the board and returns structured results
+// (user-initiated).
+func (s *Server) handleCodeRun(c *client, raw json.RawMessage) {
+	var p struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	tool, ok := s.kits.Tool("code_run")
+	if !ok {
+		s.sendError(c, fmt.Errorf("code_run 不可用"))
+		return
+	}
+	result, err := tool.Call(context.Background(), map[string]any{"command": p.Command})
+	if err != nil {
+		s.sendError(c, err)
+		return
+	}
+	s.sendTo(c, "code.result", map[string]any{"tool": "code_run", "result": result})
+}
+
 func (c *client) readPump() {
 	defer func() {
 		c.srv.removeClient(c)
@@ -1136,6 +1182,10 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.handleDesktopConnect(c, msg.Payload)
 	case "desktop.close":
 		s.closeSession(msg.SessionID)
+	case "code.deploy":
+		s.handleCodeDeploy(c, msg.Payload)
+	case "code.run":
+		s.handleCodeRun(c, msg.Payload)
 	case "settings.set":
 		var p map[string]any
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
