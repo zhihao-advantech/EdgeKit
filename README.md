@@ -32,7 +32,7 @@ Capabilities are provided as **Kits**; the host aggregates the tools each Kit
 contributes, and **the built-in agent, the UI protocol and the future MCP server
 share one single definition**:
 
-- Built-in Kits: `Host`, `Network`, `Serial`, `SSH`, `SFTP`, `Workspace` — 18 tools in total
+- Built-in Kits: `Host`, `Network`, `Serial`, `SSH`, `SFTP`, `Workspace`, `CodeEdit`, `Timeline` — 24 tools in total
 - Each Kit carries a `Manifest` (`id` / `name` / `version` / `license` / `runtime` / `activation`)
   and a set of `Tool`s (JSON Schema + risk level `read` / `mutate` / `dangerous`)
 - The host requires approval for non-`read` tools (reusing the existing approval flow)
@@ -41,7 +41,7 @@ share one single definition**:
 Code layout:
 
 ```
-internal/kit/    Kit / Manifest / Tool / Registry and capability interfaces (Serial / SSH / SFTP)
+internal/kit/    Kit / Manifest / Tool / Registry and capability interfaces (Serial / SSH / SFTP / Timeline)
 internal/kits/   built-in Kit implementations; Builtin(deps) returns them all
 internal/agent/  consumes only kit.Registry, no hard-coded tools
 ```
@@ -115,7 +115,9 @@ the **single source of truth** shared by the UI, the built-in agent and (later) 
 - The host keeps one timeline per device session (capped at 5000 records); provider
   events are stored before they are broadcast
 - Uses: **UI replay** (restore scrollback after a reload), cross-channel
-  correlation, the future `wait_for_output`, and auditing
+  correlation and auditing, plus the `wait_for_output` tool — the agent can
+  **block until a matching output arrives** (boot banner, login prompt, error)
+  instead of polling reads
 - Protocol: `timeline` request → `timeline.records` event (fields `seq/time/channel/kind/data`)
 
 ## MCP (OpenClaw / Claude Code)
@@ -131,7 +133,7 @@ flow still applies.
 
 # 2) add it to OpenClaw (add probes the connection first and only saves on success)
 openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
-openclaw mcp probe edgekit        # -> edgekit: 18 tools
+openclaw mcp probe edgekit        # -> edgekit: 24 tools
 ```
 
 - Protocol: MCP (JSON-RPC 2.0 over stdio), implementing `initialize` /
@@ -219,7 +221,11 @@ upgrade tasks; it is EdgeKit's core entry point.
 - **Tool set**: `local_info` / `local_exec` (local), `net_ping` / `net_check_port` /
   `net_resolve`, `serial_status` / `serial_read` / `serial_write` / `serial_exec`,
   `ssh_status` / `ssh_exec`, `sftp_status` / `sftp_list` / `sftp_download` /
-  `sftp_upload`, `workspace_list` / `workspace_read` / `workspace_write`.
+  `sftp_upload`, `workspace_list` / `workspace_read` / `workspace_write`,
+  `code_patch` / `code_diff` / `code_deploy` / `code_run` / `code_revert`
+  (closed-loop debugging: patch → review diff → deploy → run → revert),
+  and `wait_for_output` (block until a matching device output, see
+  "Device model and timeline").
 - **Approval**: read-only tools run automatically; **mutating operations** such as
   writing to serial, running commands or uploading files **prompt first**, and only
   run after "Allow" (tick "Auto-run mutating operations" to skip the prompt).

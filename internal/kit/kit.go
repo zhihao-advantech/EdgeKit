@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"edgekit/internal/sftpx"
+	"edgekit/internal/timeline"
 )
 
 // Risk classifies what a tool does, so the host can gate it. The built-in agent
@@ -88,11 +89,21 @@ type SFTP interface {
 	Upload(path string, data []byte) error
 }
 
+// Timeline is the device-record capability: the append-only log of everything
+// observed or done on the focused device session. It lets a kit wait for a
+// device output instead of polling (e.g. a boot banner on the serial console).
+type Timeline interface {
+	Wait(ctx context.Context, f timeline.Filter, timeout time.Duration) (timeline.Record, error)
+	Since(after uint64, limit int) []timeline.Record
+	LastSeq() uint64
+}
+
 // Deps bundles the capabilities handed to the built-in kits.
 type Deps struct {
-	Serial Serial
-	SSH    SSH
-	SFTP   SFTP
+	Serial   Serial
+	SSH      SSH
+	SFTP     SFTP
+	Timeline Timeline
 }
 
 /* ------------------------------------------------------------------ *

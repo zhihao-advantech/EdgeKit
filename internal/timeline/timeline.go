@@ -42,7 +42,8 @@ type Filter struct {
 	Pattern  *regexp.Regexp // matched against Data
 }
 
-func (f Filter) match(r Record) bool {
+// Match reports whether r passes the filter.
+func (f Filter) Match(r Record) bool {
 	if f.Channel != "" && r.Channel != f.Channel {
 		return false
 	}
@@ -214,7 +215,7 @@ func (t *Timeline) findLocked(f Filter) (Record, bool) {
 		if r.Seq <= f.AfterSeq {
 			continue
 		}
-		if f.match(r) {
+		if f.Match(r) {
 			return clone(r), true
 		}
 	}

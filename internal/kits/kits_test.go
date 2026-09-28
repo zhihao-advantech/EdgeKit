@@ -16,11 +16,11 @@ func buildRegistry() *kit.Registry {
 
 func TestBuiltinKitsContributeTools(t *testing.T) {
 	reg := buildRegistry()
-	if got := len(reg.Tools()); got != 23 {
-		t.Fatalf("expected 23 tools from the built-in kits, got %d", got)
+	if got := len(reg.Tools()); got != 24 {
+		t.Fatalf("expected 24 tools from the built-in kits, got %d", got)
 	}
-	if got := len(reg.Manifests()); got != 7 {
-		t.Fatalf("expected 7 kits, got %d", got)
+	if got := len(reg.Manifests()); got != 8 {
+		t.Fatalf("expected 8 kits, got %d", got)
 	}
 }
 
@@ -56,7 +56,7 @@ func TestToolRiskClassification(t *testing.T) {
 	}
 	readOnly := []string{"local_info", "net_ping", "net_check_port", "net_resolve",
 		"serial_status", "serial_read", "ssh_status", "sftp_status", "sftp_list",
-		"workspace_list", "workspace_read", "code_diff"}
+		"workspace_list", "workspace_read", "code_diff", "wait_for_output"}
 	for _, name := range readOnly {
 		tool, ok := reg.Tool(name)
 		if !ok {
@@ -82,7 +82,7 @@ func TestRegistryIgnoresDuplicateToolNames(t *testing.T) {
 
 func TestKitActivation(t *testing.T) {
 	reg := buildRegistry()
-	const all = 23
+	const all = 24
 	if got := len(reg.Tools()); got != all {
 		t.Fatalf("all kits enabled should expose %d tools, got %d", all, got)
 	}

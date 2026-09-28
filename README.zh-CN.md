@@ -28,7 +28,7 @@ AI Agent、串口调试、SSH 终端、工作区文件管理，支持**同时连
 
 能力以 **Kit**（能力包）形式提供，宿主（Host）聚合各 Kit 贡献的工具，**内置 Agent、UI 协议与后续的 MCP Server 共用同一份定义**：
 
-- 内置 Kit：`Host`、`Network`、`Serial`、`SSH`、`SFTP`、`Workspace`，共 18 个工具
+- 内置 Kit：`Host`、`Network`、`Serial`、`SSH`、`SFTP`、`Workspace`、`CodeEdit`、`Timeline`，共 24 个工具
 - 每个 Kit 带 `Manifest`（`id` / `name` / `version` / `license` / `runtime` / `activation`）
   与一组 `Tool`（JSON Schema + 风险等级 `read` / `mutate` / `dangerous`）
 - 宿主对非 `read` 工具要求审批（沿用现有 approval 流程）
@@ -37,7 +37,7 @@ AI Agent、串口调试、SSH 终端、工作区文件管理，支持**同时连
 代码结构：
 
 ```
-internal/kit/    Kit / Manifest / Tool / Registry 与能力接口（Serial / SSH / SFTP）
+internal/kit/    Kit / Manifest / Tool / Registry 与能力接口（Serial / SSH / SFTP / Timeline）
 internal/kits/   内置 Kit 实现，Builtin(deps) 返回全部
 internal/agent/  只消费 kit.Registry，不再硬编码工具
 ```
@@ -98,7 +98,9 @@ Agent 面板 ──agent.config{backend, acpCommand, acpArgs}──▶ internal/
 - 位置：`internal/timeline/`
 - API：`Append` / `Since(seq, limit)` / `Wait(ctx, filter, timeout)` / `LastSeq`
 - 宿主为每个设备会话维护一条时间线（上限 5000 条），provider 事件在广播前先落库
-- 用途：**UI 回放**（刷新后恢复滚动内容）、跨通道关联、后续的 `wait_for_output` 与审计
+- 用途：**UI 回放**（刷新后恢复滚动内容）、跨通道关联、审计，以及
+  `wait_for_output` 工具——Agent 发送命令后**阻塞等待匹配的输出**
+  （启动横幅、登录提示、错误信息），无需反复轮询读取
 - 协议：`timeline` 请求 → `timeline.records` 事件（字段 `seq/time/channel/kind/data`）
 
 ## MCP（OpenClaw / Claude Code 接入）
@@ -113,7 +115,7 @@ EdgeKit 可以作为一个 **MCP 工具服务**被外部 Agent 驱动：`edgekit
 
 # 2) 加入 OpenClaw（add 会先连上探活、成功后才保存）
 openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
-openclaw mcp probe edgekit        # -> edgekit: 18 tools
+openclaw mcp probe edgekit        # -> edgekit: 24 tools
 ```
 
 - 协议：MCP（JSON-RPC 2.0 over stdio），实现 `initialize` / `tools/list` / `tools/call`
@@ -184,7 +186,10 @@ ln -s "$PWD/skills/edgekit-board-debug" ~/.agents/skills/edgekit-board-debug
 - **工具集**：`local_info` / `local_exec`（本机）、`net_ping` / `net_check_port` / `net_resolve`、
   `serial_status` / `serial_read` / `serial_write` / `serial_exec`、
   `ssh_status` / `ssh_exec`、`sftp_status` / `sftp_list` / `sftp_download` / `sftp_upload`、
-  `workspace_list` / `workspace_read` / `workspace_write`。
+  `workspace_list` / `workspace_read` / `workspace_write`、
+  `code_patch` / `code_diff` / `code_deploy` / `code_run` / `code_revert`（闭环调试：
+  改代码 → 审查 diff → 部署到板端 → 运行验证 → 失败回退）、
+  `wait_for_output`（等待设备输出匹配，见「设备模型与时间线」）。
 - **安全确认**：只读工具自动执行；写串口、执行命令、上传文件等**修改性操作会先弹出确认**，
   用户点「允许执行」后才会运行（可勾选「自动执行修改性操作」跳过确认）。
 - **上下文感知**：Agent 知道当前串口 / SSH 是否已连接及目标，直接复用已建立的会话，下载落到本地工作区。

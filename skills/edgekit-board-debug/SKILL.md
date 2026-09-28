@@ -118,8 +118,8 @@ WebSocket API：与界面走同一套协议，适合 Agent 直接调用（见第
 
 ## 6. 内置 Agent 工具清单
 
-工具由内置 Kit 提供（Host / Network / Serial / SSH / SFTP / Workspace），可在
-「工具 → Kits 管理」中启用/禁用；禁用的 Kit 不暴露工具。Agent 在它们之上做
+工具由内置 Kit 提供（Host / Network / Serial / SSH / SFTP / Workspace / CodeEdit / Timeline），
+可在「工具 → Kits 管理」中启用/禁用；禁用的 Kit 不暴露工具。Agent 在它们之上做
 function-calling（只读工具自动执行，**修改性工具默认需用户确认**）：
 
 | 工具 | 作用 | 修改性 |
@@ -135,6 +135,9 @@ function-calling（只读工具自动执行，**修改性工具默认需用户�
 | `sftp_upload` | 上传文本到远端 | 是 |
 | `workspace_list` / `workspace_read` | 列 / 读本地工作区 | 否 |
 | `workspace_write` | 写本地工作区（暂存固件、脚本） | 是 |
+| `code_patch` / `code_diff` | 应用代码补丁（带假设与验证命令，供审批卡片审查）/ 只看 diff | 是 / 否 |
+| `code_deploy` / `code_run` / `code_revert` | 推送文件到板端 / 在板端运行并返回结构化结果 / 回退到备份 | 是 |
+| `wait_for_output` | **阻塞等待**设备输出匹配正则（串口 rx / SSH stdout；默认回看最近 500 条，超时返回最近输出） | 否 |
 
 未配置模型时，内置 Agent 走 **Normal 模式**（内置流程）：巡检、系统日志、磁盘、内存、进程、系统版本、ping。
 配置模型（OpenAI 兼容）后即可自然语言驱动。
@@ -197,7 +200,7 @@ EdgeKit 也能作为 MCP 工具服务被外部 Agent 调用，工具面与内置
 ```bash
 ./build/edgekit                                          # 先启动 App
 openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
-openclaw mcp probe edgekit                               # 18 tools
+openclaw mcp probe edgekit                               # 24 tools
 ```
 
 - 传输：stdio（`edgekit mcp`），协议 JSON-RPC 2.0；调用会转发给正在运行的 App

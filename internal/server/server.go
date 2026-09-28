@@ -150,9 +150,10 @@ func New() *Server {
 	// The focused-session proxies are the capabilities every built-in kit and
 	// the agent resolve against, so a tool call always acts on the selected device.
 	s.deps = kit.Deps{
-		Serial: focusedSerial{s},
-		SSH:    focusedSSH{s},
-		SFTP:   focusedSFTP{s},
+		Serial:   focusedSerial{s},
+		SSH:      focusedSSH{s},
+		SFTP:     focusedSFTP{s},
+		Timeline: focusedTimeline{s},
 	}
 	s.kits = kit.NewRegistry()
 	for _, k := range kits.Builtin(s.deps) {
@@ -443,6 +444,39 @@ func (f focusedSFTP) Upload(p string, data []byte) error {
 		return m.Upload(p, data)
 	}
 	return fmt.Errorf("SFTP 未就绪")
+}
+
+// focusedTimeline resolves the focused session's record. Its zero value (no
+// timeline method set) is not a kit.Timeline, so kits built without a device
+// see a nil capability and report "no device session".
+type focusedTimeline struct{ s *Server }
+
+func (f focusedTimeline) timeline() *timeline.Timeline {
+	if ds := f.s.session(""); ds != nil {
+		return ds.tl
+	}
+	return nil
+}
+
+func (f focusedTimeline) Wait(ctx context.Context, flt timeline.Filter, timeout time.Duration) (timeline.Record, error) {
+	if tl := f.timeline(); tl != nil {
+		return tl.Wait(ctx, flt, timeout)
+	}
+	return timeline.Record{}, fmt.Errorf("当前没有设备会话（请先连接串口或 SSH）")
+}
+
+func (f focusedTimeline) Since(after uint64, limit int) []timeline.Record {
+	if tl := f.timeline(); tl != nil {
+		return tl.Since(after, limit)
+	}
+	return nil
+}
+
+func (f focusedTimeline) LastSeq() uint64 {
+	if tl := f.timeline(); tl != nil {
+		return tl.LastSeq()
+	}
+	return 0
 }
 
 /* ------------------------------------------------------------------ *
