@@ -13,6 +13,11 @@ WEBKIT="${EDGEKIT_WEBKIT:-}"
 if [ -z "$WEBKIT" ] && [ -r /usr/lib/edgekit/variant ]; then
 	WEBKIT=$(cat /usr/lib/edgekit/variant)
 fi
+if [ -z "$WEBKIT" ]; then
+	# Installed alongside this script (the .run layout).
+	here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+	[ -r "$here/variant" ] && WEBKIT=$(cat "$here/variant")
+fi
 case "$WEBKIT" in
 4.1)
 	WEBKIT_LIB="libwebkit2gtk-4.1"

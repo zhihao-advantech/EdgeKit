@@ -36,7 +36,7 @@ export CGO_LDFLAGS
 PKGDIR ?= packaging
 DIST   ?= dist
 
-.PHONY: all build run headless vet tidy fmt clean shim info package-deb
+.PHONY: all build run headless vet tidy fmt clean shim info package package-deb package-run
 
 all: build
 
@@ -76,3 +76,10 @@ info:
 # Debian package (declares system dependencies and prints a verified table).
 package-deb: build
 	VERSION="$(VERSION)" WEBKIT="$(WEBKIT)" DIST="$(DIST)" $(PKGDIR)/make-deb.sh
+
+# Self-extracting installer (checks dependencies itself, supports --uninstall).
+package-run: build
+	VERSION="$(VERSION)" WEBKIT="$(WEBKIT)" DIST="$(DIST)" $(PKGDIR)/make-run.sh
+
+# Both package formats for the current build variant.
+package: package-deb package-run
