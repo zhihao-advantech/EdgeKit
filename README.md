@@ -40,6 +40,12 @@ share one single definition**:
   bridge) — a prerequisite for later external kits
 - The host requires approval for non-`read` tools (reusing the existing
   approval flow); validation happens **before** the approval gate
+- Every tool call runs under a **per-call timeout** (`kit.DefaultCallTimeout`,
+  10 minutes): even a tool that ignores its context cannot stall an agent turn
+  or an MCP client; a timeout surfaces any partial output
+- Every tool call (request `action` + outcome `result`) is **recorded on the
+  device timeline**, so audit replay shows what was done to the device, not
+  just what the device printed
 - "Help → About" shows the loaded Kits and tool counts
 
 Code layout:

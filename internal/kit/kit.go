@@ -9,6 +9,7 @@ package kit
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"sync"
@@ -39,6 +40,66 @@ type Tool struct {
 
 // Mutating reports whether the tool changes device or host state.
 func (t Tool) Mutating() bool { return t.Risk != RiskRead }
+
+// DefaultCallTimeout bounds a single tool call at the host's call sites. Long
+// but legitimate operations (builds, flashing) still fit; a hung tool cannot
+// stall an agent turn or an MCP client forever.
+const DefaultCallTimeout = 10 * time.Minute
+
+// callResult is the outcome of one tool call goroutine.
+type callResult struct {
+	out string
+	err error
+}
+
+// Invoke runs the tool under a per-call deadline. The caller's wait is bounded
+// even when the tool ignores its context: the call runs in its own goroutine,
+// and a deadline that fires mid-call is reported as an error immediately (the
+// goroutine itself finishes naturally in the background). timeout <= 0 bounds
+// the call by ctx alone.
+func (t Tool) Invoke(ctx context.Context, args map[string]any, timeout time.Duration) (string, error) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	done := make(chan callResult, 1) // buffered: the goroutine never blocks on send
+	go func() {
+		out, err := t.Call(ctx, args)
+		done <- callResult{out, err}
+	}()
+	select {
+	case r := <-done:
+		return t.finished(r, ctx, timeout)
+	case <-ctx.Done():
+		if ctx.Err() != context.DeadlineExceeded {
+			return "", ctx.Err()
+		}
+		// A tool that respects its context often surfaces its partial output
+		// exactly at the deadline; give it a short grace before reporting a
+		// bare timeout.
+		grace := time.NewTimer(50 * time.Millisecond)
+		defer grace.Stop()
+		select {
+		case r := <-done:
+			return t.finished(r, ctx, timeout)
+		case <-grace.C:
+			return "", fmt.Errorf("工具 %s 执行超时（上限 %s）", t.Name, timeout)
+		}
+	}
+}
+
+// finished maps a completed call to its result, converting a deadline that
+// fired mid-call into a timeout error (keeping any partial output).
+func (t Tool) finished(r callResult, ctx context.Context, timeout time.Duration) (string, error) {
+	if r.err == nil && ctx.Err() == context.DeadlineExceeded {
+		if r.out != "" {
+			return r.out, fmt.Errorf("工具 %s 执行超时（上限 %s），以上为已产生的输出", t.Name, timeout)
+		}
+		return "", fmt.Errorf("工具 %s 执行超时（上限 %s）", t.Name, timeout)
+	}
+	return r.out, r.err
+}
 
 // Manifest describes a kit. It mirrors an editor extension manifest so the same
 // shape can later be loaded from a kit.json for external kits.
@@ -91,8 +152,10 @@ type SFTP interface {
 
 // Timeline is the device-record capability: the append-only log of everything
 // observed or done on the focused device session. It lets a kit wait for a
-// device output instead of polling (e.g. a boot banner on the serial console).
+// device output instead of polling (e.g. a boot banner on the serial console),
+// and lets the host audit what was done to the device.
 type Timeline interface {
+	Append(r timeline.Record) timeline.Record
 	Wait(ctx context.Context, f timeline.Filter, timeout time.Duration) (timeline.Record, error)
 	Since(after uint64, limit int) []timeline.Record
 	LastSeq() uint64

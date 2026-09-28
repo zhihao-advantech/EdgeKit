@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"edgekit/internal/kit"
 	"edgekit/internal/kits"
 	"edgekit/internal/policy"
+	"edgekit/internal/timeline"
 )
 
 type stubSerial struct {
@@ -28,6 +30,21 @@ func (s *stubSerial) Recent() []byte       { return s.recent }
 func (s *stubSerial) RunCapture(command string, quiet, timeout time.Duration) (string, error) {
 	return "stub output for " + command, nil
 }
+
+// stubTimeline captures the audit records appended by tool calls.
+type stubTimeline struct {
+	records []timeline.Record
+}
+
+func (s *stubTimeline) Append(r timeline.Record) timeline.Record {
+	s.records = append(s.records, r)
+	return r
+}
+func (s *stubTimeline) Wait(ctx context.Context, f timeline.Filter, timeout time.Duration) (timeline.Record, error) {
+	return timeline.Record{}, timeline.ErrTimeout
+}
+func (s *stubTimeline) Since(after uint64, limit int) []timeline.Record { return nil }
+func (s *stubTimeline) LastSeq() uint64                                 { return uint64(len(s.records)) }
 
 type stubSSH struct {
 	out string
@@ -247,6 +264,36 @@ func TestAgentRejectsInvalidToolArgs(t *testing.T) {
 	}
 	if !sawRejection {
 		t.Fatal("rejection not sent back to the model")
+	}
+}
+
+func TestAgentToolCallsAuditedToTimeline(t *testing.T) {
+	tl := &stubTimeline{}
+	srv := mockLLM(t, []string{
+		`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"net_check_port","arguments":"{\"host\":\"127.0.0.1\",\"port\":22}"}}]}}]}`,
+		`{"choices":[{"message":{"role":"assistant","content":"检查完成"}}]}`,
+	}, nil)
+
+	c := newCollector()
+	ag := newTestManager(Deps{Timeline: tl}, testGate(true), c.on)
+	ag.SetConfig(Config{BaseURL: srv.URL, APIKey: "test", Model: "mock"})
+	ag.Send("检查 127.0.0.1 的 22 端口")
+	c.wait(t)
+
+	var action, result bool
+	for _, r := range tl.records {
+		if r.Channel != timeline.ChannelAgent {
+			t.Fatalf("audit record on wrong channel: %+v", r)
+		}
+		switch r.Kind {
+		case "action":
+			action = strings.Contains(string(r.Data), "net_check_port")
+		case "result":
+			result = strings.Contains(string(r.Data), "net_check_port ok:")
+		}
+	}
+	if !action || !result {
+		t.Fatalf("expected action + result audit records, got %+v", tl.records)
 	}
 }
 

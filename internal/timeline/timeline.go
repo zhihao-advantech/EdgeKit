@@ -30,7 +30,7 @@ type Record struct {
 	Seq     uint64    `json:"seq"`
 	Time    time.Time `json:"time"`
 	Channel string    `json:"channel"`
-	Kind    string    `json:"kind"` // rx | tx | stdout | stderr | info | error | action
+	Kind    string    `json:"kind"` // rx | tx | stdout | stderr | info | error | action | result
 	Data    []byte    `json:"data"`
 }
 

@@ -1,0 +1,74 @@
+package kit
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestInvokeBoundsHungTool(t *testing.T) {
+	// A tool that ignores its context: Invoke must still unblock the caller
+	// at the deadline instead of waiting for the tool's natural end.
+	slow := Tool{
+		Name: "slow",
+		Call: func(ctx context.Context, args map[string]any) (string, error) {
+			time.Sleep(300 * time.Millisecond)
+			return "done", nil
+		},
+	}
+	start := time.Now()
+	if _, err := slow.Invoke(context.Background(), nil, 20*time.Millisecond); err == nil || !strings.Contains(err.Error(), "执行超时") {
+		t.Fatalf("hung tool should time out, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed >= 250*time.Millisecond {
+		t.Fatalf("caller waited for the tool's natural end (%s)", elapsed)
+	}
+}
+
+func TestInvokeKeepsPartialOutput(t *testing.T) {
+	partial := Tool{
+		Name: "partial",
+		Call: func(ctx context.Context, args map[string]any) (string, error) {
+			<-ctx.Done() // returns "output" only after the deadline fired
+			return "partial output", nil
+		},
+	}
+	out, err := partial.Invoke(context.Background(), nil, 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "执行超时") {
+		t.Fatalf("deadline should be reported, got %v", err)
+	}
+	if !strings.Contains(out, "partial output") {
+		t.Fatalf("partial output should be kept, got %q", out)
+	}
+}
+
+func TestInvokeWithinDeadline(t *testing.T) {
+	fast := Tool{
+		Name: "fast",
+		Call: func(ctx context.Context, args map[string]any) (string, error) {
+			return "ok", nil
+		},
+	}
+	out, err := fast.Invoke(context.Background(), nil, time.Minute)
+	if err != nil || out != "ok" {
+		t.Fatalf("fast tool should run, got %q, %v", out, err)
+	}
+	// timeout <= 0 leaves the call bounded by ctx alone.
+	out, err = fast.Invoke(context.Background(), nil, 0)
+	if err != nil || out != "ok" {
+		t.Fatalf("zero timeout should not wrap, got %q, %v", out, err)
+	}
+}
+
+func TestInvokePropagatesToolError(t *testing.T) {
+	failing := Tool{
+		Name: "failing",
+		Call: func(ctx context.Context, args map[string]any) (string, error) {
+			return "", context.DeadlineExceeded
+		},
+	}
+	if _, err := failing.Invoke(context.Background(), nil, time.Minute); err == nil {
+		t.Fatal("tool error should propagate")
+	}
+}

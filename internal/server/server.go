@@ -458,6 +458,13 @@ func (f focusedTimeline) timeline() *timeline.Timeline {
 	return nil
 }
 
+func (f focusedTimeline) Append(r timeline.Record) timeline.Record {
+	if tl := f.timeline(); tl != nil {
+		return tl.Append(r)
+	}
+	return timeline.Record{}
+}
+
 func (f focusedTimeline) Wait(ctx context.Context, flt timeline.Filter, timeout time.Duration) (timeline.Record, error) {
 	if tl := f.timeline(); tl != nil {
 		return tl.Wait(ctx, flt, timeout)
@@ -989,17 +996,20 @@ func (s *Server) handleToolCall(c *client, msg message) {
 	// Audit: record the request on the focused device's timeline (best effort).
 	s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "action", Data: []byte(p.Name + " " + argText)})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), kit.DefaultCallTimeout)
 	defer cancel()
 	if err := s.gate.Check(ctx, p.Name, t.Risk, argText); err != nil {
+		s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " denied: " + err.Error())})
 		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": err.Error()})
 		return
 	}
-	out, err := t.Call(ctx, p.Args)
+	out, err := t.Invoke(ctx, p.Args, kit.DefaultCallTimeout)
 	if err != nil {
+		s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " error: " + kit.Truncate(err.Error(), 2000))})
 		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": err.Error()})
 		return
 	}
+	s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " ok: " + kit.Truncate(out, 2000))})
 	s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": true, "output": out})
 }
 

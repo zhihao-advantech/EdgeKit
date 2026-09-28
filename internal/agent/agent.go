@@ -23,6 +23,7 @@ import (
 
 	"edgekit/internal/kit"
 	"edgekit/internal/policy"
+	"edgekit/internal/timeline"
 	"edgekit/internal/workspace"
 )
 
@@ -354,22 +355,36 @@ func (m *Manager) runTool(ctx context.Context, name string, args map[string]any,
 		return "", err
 	}
 
+	// Audit: every tool call lands on the focused device's timeline (best
+	// effort), so the record shows what was done to the device, not just
+	// what the device printed.
+	m.recordToolCall("action", name+" "+argText)
+
 	if !force && m.gate != nil {
 		if err := m.gate.Check(ctx, name, t.Risk, argText); err != nil {
 			m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: "denied", Result: err.Error()})
+			m.recordToolCall("result", name+" denied: "+err.Error())
 			return err.Error(), nil
 		}
 	}
 
 	m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: "running"})
-	out, err := t.Call(ctx, args)
+	out, err := t.Invoke(ctx, args, kit.DefaultCallTimeout)
 	state := "ok"
 	if err != nil {
 		state = "error"
 		out = err.Error()
 	}
+	m.recordToolCall("result", name+" "+state+": "+kit.Truncate(out, 2000))
 	m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: state, Result: kit.Truncate(out, 4000)})
 	return out, err
+}
+
+// recordToolCall appends an audit record to the focused device's timeline.
+func (m *Manager) recordToolCall(kind, text string) {
+	if m.deps.Timeline != nil {
+		m.deps.Timeline.Append(timeline.Record{Channel: timeline.ChannelAgent, Kind: kind, Data: []byte(text)})
+	}
 }
 
 /* ------------------------------------------------------------------ *

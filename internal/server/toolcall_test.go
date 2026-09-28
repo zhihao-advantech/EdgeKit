@@ -8,6 +8,8 @@ import (
 	"edgekit/internal/kit"
 	"edgekit/internal/kits"
 	"edgekit/internal/policy"
+	"edgekit/internal/serial"
+	"edgekit/internal/timeline"
 )
 
 // toolResult is the reply payload of a tool.call.
@@ -88,13 +90,32 @@ func TestHandleToolCallUnknownTool(t *testing.T) {
 	}
 }
 
-func TestHandleToolCallRunsValidTool(t *testing.T) {
+func TestHandleToolCallRecordsTimeline(t *testing.T) {
 	s := newToolCallServer()
+	tl := timeline.New(100)
+	s.registerSession(&deviceSession{
+		id: "serial-1", kind: "serial", label: "ttyUSB0",
+		serial: serial.New(nil), tl: tl,
+	})
+
 	res := callTool(t, s, "1", "workspace_list", map[string]any{})
 	if !res.OK {
 		t.Fatalf("valid call should run, got %+v", res)
 	}
-	if res.Output == "" {
-		t.Fatal("expected output")
+
+	records := tl.Since(0, 0)
+	if len(records) != 2 {
+		t.Fatalf("expected action + result records, got %+v", records)
+	}
+	if records[0].Kind != "action" || !strings.Contains(string(records[0].Data), "workspace_list") {
+		t.Fatalf("action record = %+v", records[0])
+	}
+	if records[1].Kind != "result" || !strings.Contains(string(records[1].Data), "workspace_list ok:") {
+		t.Fatalf("result record = %+v", records[1])
+	}
+	for _, r := range records {
+		if r.Channel != timeline.ChannelAgent {
+			t.Fatalf("audit record on wrong channel: %+v", r)
+		}
 	}
 }
