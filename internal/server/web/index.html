@@ -48,11 +48,6 @@
   <div class="menu" data-menu="terminal">
     <button class="menu-btn">终端</button>
     <div class="dropdown">
-      <div class="mi check" data-action="toggle-auto">自动滚动</div>
-      <div class="mi check" data-action="toggle-ts">时间戳</div>
-      <div class="mi check" data-action="toggle-hex">HEX 显示</div>
-      <div class="mi check" data-action="toggle-echo">本地回显</div>
-      <div class="sep"></div>
       <div class="mi" data-action="clear">清空终端</div>
       <div class="sep"></div>
       <div class="mi" data-action="copy">复制<span class="sc">Ctrl+Shift+C</span></div>
@@ -93,6 +88,18 @@
 
   <span class="spacer"></span>
   <span class="pill" id="pill-active">无活动会话</span>
+  <div class="menu menu-right" data-menu="settings">
+    <button class="menu-btn icon-only" title="设置" aria-label="设置">
+      <svg viewBox="0 0 16 16"><path d="M6.6 1.8h2.8l.4 1.5 1.3.8 1.5-.5 1.4 2.4-1.2 1 .1 1.5 1.2 1-1.4 2.4-1.5-.5-1.3.8-.4 1.5H6.6l-.4-1.5-1.3-.8-1.5.5-1.4-2.4 1.2-1-.1-1.5-1.2-1 1.4-2.4 1.5.5 1.3-.8z"/><circle cx="8" cy="8" r="2"/></svg>
+    </button>
+    <div class="dropdown dropdown-right">
+      <div class="dd-title">终端显示（全局，自动保存）</div>
+      <div class="mi check" data-action="pref-auto">自动滚动</div>
+      <div class="mi check" data-action="pref-ts">时间戳</div>
+      <div class="mi check" data-action="pref-hex">HEX 显示</div>
+      <div class="mi check" data-action="pref-echo">本地回显</div>
+    </div>
+  </div>
 </nav>
 
 <!-- ============================ 工作区布局 ============================ -->

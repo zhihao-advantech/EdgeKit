@@ -261,6 +261,24 @@ func TestE2EProtocol(t *testing.T) {
 	if tools := c.tools(); !tools["workspace_write"] {
 		t.Fatal("re-enabled kit should expose tools again")
 	}
+
+	// Terminal display preferences persist to the settings file (and survive a
+	// subsequent client update).
+	c.send("settings.set", map[string]any{"term-ts": false, "term-hex": true})
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if st := loadSettings(); st["term-ts"] == false && st["term-hex"] == true {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	st := loadSettings()
+	if st["term-ts"] != false || st["term-hex"] != true {
+		t.Fatalf("term preferences not persisted: %#v", st)
+	}
+	if _, ok := st["kits.disabled"]; !ok {
+		t.Fatalf("client settings update dropped host-managed keys: %#v", st)
+	}
 }
 
 // startVirtualSerialPair wires two pseudo-terminals through socat: data written

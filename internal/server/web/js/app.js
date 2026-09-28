@@ -75,9 +75,9 @@
       this.el = el;
       this.max = opts.max || 5000;
       this.events = [];
-      this.hex = false;
-      this.ts = true;
-      this.auto = true;
+      this.hex = !!opts.hex;
+      this.ts = opts.ts !== undefined ? !!opts.ts : true;
+      this.auto = opts.auto !== undefined ? !!opts.auto : true;
       this.raf = 0;
       this.reset();
     }
@@ -336,7 +336,9 @@
       visible: true,
     },
     kits: { kits: [] },
-    localEcho: false,
+    // Global terminal display preferences; changed from the settings (gear)
+    // menu and persisted until changed again.
+    term: { auto: true, ts: true, hex: false, echo: false },
     sidebar: true,
     fontScale: 1,
     rx: 0,
@@ -426,7 +428,7 @@
     const output = view.querySelector(".output");
     output.addEventListener("keydown", onTermKey);
     output.addEventListener("paste", onTermPaste);
-    ds.console = new ConsoleView(output);
+    ds.console = new ConsoleView(output, state.term);
     ds.termEl = output;
 
     state.devices.set(ds.id, ds);
@@ -859,7 +861,7 @@
     const bytes = b64ToBytes(p.data);
     if (p.direction === "tx") {
       state.tx += bytes.length;
-      if (state.localEcho) ds.console.push("tx", bytes, p.time);
+      if (state.term.echo) ds.console.push("tx", bytes, p.time);
     } else {
       if (p.direction === "rx") state.rx += bytes.length;
       ds.console.push(p.direction || "rx", bytes, p.time);
@@ -1204,7 +1206,7 @@
       if (!ds.connected) { toast("SSH 未连接"); return; }
       if (!ds.shell) { toast("Shell 未打开"); return; }
       send("ssh.shell.write", { data: text }, id);
-      if (state.localEcho) ds.console.push("tx", new TextEncoder().encode(text), new Date().toISOString());
+      if (state.term.echo) ds.console.push("tx", new TextEncoder().encode(text), new Date().toISOString());
     }
   }
   function copySelection() {
@@ -1645,14 +1647,32 @@
     if (mi) mi.classList.toggle("checked", !!on);
   }
   function updateMenuState() {
-    const ds = state.activeTab && state.activeTab !== "agent" ? state.devices.get(state.activeTab) : null;
-    const cv = ds ? ds.console : null;
-    setChecked("toggle-auto", cv ? cv.auto : false);
-    setChecked("toggle-ts", cv ? cv.ts : false);
-    setChecked("toggle-hex", cv ? cv.hex : false);
-    setChecked("toggle-echo", state.localEcho);
+    setChecked("pref-auto", state.term.auto);
+    setChecked("pref-ts", state.term.ts);
+    setChecked("pref-hex", state.term.hex);
+    setChecked("pref-echo", state.term.echo);
     setChecked("toggle-sidebar", state.sidebar);
     setChecked("toggle-workspace", state.ws.visible);
+  }
+  // Terminal display preferences are global and persisted: a change applies to
+  // every open session right away and to every session opened later, until it
+  // is changed again (also across restarts, via the settings file).
+  function setTermPref(key, on) {
+    state.term[key] = !!on;
+    applyTermPrefs();
+    persistSettings();
+    updateMenuState();
+  }
+  function applyTermPrefs() {
+    for (const ds of state.devices.values()) {
+      const cv = ds.console;
+      if (!cv) continue;
+      cv.auto = state.term.auto;
+      cv.ts = state.term.ts;
+      cv.hex = state.term.hex;
+      cv.rerender();
+      if (cv.auto) cv.scrollBottom();
+    }
   }
   function runAction(action) {
     const ds = state.activeTab && state.activeTab !== "agent" ? state.devices.get(state.activeTab) : null;
@@ -1671,10 +1691,10 @@
         }
         closeAgentTab();
         break;
-      case "toggle-auto": if (cv) { cv.auto = !cv.auto; if (cv.auto) cv.scrollBottom(); } break;
-      case "toggle-ts": if (cv) { cv.ts = !cv.ts; cv.rerender(); } break;
-      case "toggle-hex": if (cv) { cv.hex = !cv.hex; cv.rerender(); } break;
-      case "toggle-echo": state.localEcho = !state.localEcho; break;
+      case "pref-auto": setTermPref("auto", !state.term.auto); break;
+      case "pref-ts": setTermPref("ts", !state.term.ts); break;
+      case "pref-hex": setTermPref("hex", !state.term.hex); break;
+      case "pref-echo": setTermPref("echo", !state.term.echo); break;
       case "clear":
         if (state.activeTab === "agent") { $("agent-chat").textContent = ""; agentCards.clear(); }
         else if (cv) cv.clear();
@@ -1957,6 +1977,10 @@
     data["agent-acp-args"] = state.agent.acpArgs;
     data["agent-acp-override"] = state.agent.acpOverride;
     data["agent-acp-model"] = state.agent.acpModel;
+    data["term-auto"] = state.term.auto;
+    data["term-ts"] = state.term.ts;
+    data["term-hex"] = state.term.hex;
+    data["term-echo"] = state.term.echo;
     data["new-kind"] = newKind;
     return data;
   }
@@ -1988,6 +2012,13 @@
     updateBackendUI();
     setAgentMode();
     pushAgentConfig();
+
+    if (data["term-auto"] !== undefined) state.term.auto = !!data["term-auto"];
+    if (data["term-ts"] !== undefined) state.term.ts = !!data["term-ts"];
+    if (data["term-hex"] !== undefined) state.term.hex = !!data["term-hex"];
+    if (data["term-echo"] !== undefined) state.term.echo = !!data["term-echo"];
+    applyTermPrefs();
+    updateMenuState();
   }
   function wirePersist() {
     for (const id of PERSIST_FIELDS) {

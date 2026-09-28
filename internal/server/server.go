@@ -1297,6 +1297,17 @@ func saveSettings(m map[string]any) error {
 	return os.WriteFile(settingsPath(), data, 0o600)
 }
 
+// mergeSettings overlays p onto the stored settings and saves the result. The
+// UI sends only the keys it owns, so merging keeps server-managed keys (such as
+// kits.disabled) intact instead of dropping them.
+func mergeSettings(p map[string]any) error {
+	merged := loadSettings()
+	for k, v := range p {
+		merged[k] = v
+	}
+	return saveSettings(merged)
+}
+
 /* ------------------------------------------------------------------ *
  * dispatch
  * ------------------------------------------------------------------ */
@@ -1375,7 +1386,7 @@ func (s *Server) dispatch(c *client, msg message) {
 	case "settings.set":
 		var p map[string]any
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			if err := saveSettings(p); err != nil {
+			if err := mergeSettings(p); err != nil {
 				s.sendError(c, err)
 			}
 		}

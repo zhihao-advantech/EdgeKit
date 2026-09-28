@@ -102,7 +102,9 @@ sudo apt install ./dist/edgekit_<version>_<arch>.deb   # apt resolves dependenci
 ## Usage
 
 1. Run `edgekit`: a menu bar on top, "Sessions / Workspace / Session settings"
-   on the left, session tabs and a black terminal.
+   on the left, session tabs and a black terminal; the **gear icon** at the top
+   right holds the terminal display settings (auto-scroll / timestamps / HEX /
+   local echo), saved automatically and applied globally.
 2. New session: "Session → New Serial / SSH session"; connect several boards and
    switch tabs.
 3. Use the agent: fill in an OpenAI-compatible Base URL / API key / model under
