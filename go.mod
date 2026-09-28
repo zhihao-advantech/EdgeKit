@@ -15,3 +15,5 @@ require (
 	github.com/kr/fs v0.1.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 )
+
+replace github.com/webview/webview_go => ./third_party/webview_go
