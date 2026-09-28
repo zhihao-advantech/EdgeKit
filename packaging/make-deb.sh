@@ -19,7 +19,7 @@ MAINTAINER=${MAINTAINER:-$(git -C "$ROOT" config user.name 2>/dev/null || echo "
 case "$WEBKIT" in
 4.1)
 	WEBKIT_LIB="libwebkit2gtk-4.1"
-	DEPENDS="libgtk-3-0 (>= 3.24), libwebkit2gtk-4.1-0 (>= 2.42), libstdc++6 (>= 12)"
+	DEPENDS="libgtk-3-0t64 (>= 3.24) | libgtk-3-0 (>= 3.24), libwebkit2gtk-4.1-0 (>= 2.42), libstdc++6 (>= 12)"
 	WEBKIT_DESC="WebKitGTK 4.1 (Ubuntu 24.04+, Debian 13+)"
 	;;
 4.0 | *)
