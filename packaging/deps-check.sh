@@ -5,8 +5,13 @@
 # sufficient version. Exits non-zero when something is missing or too old.
 #
 # The WebKitGTK variant is read from EDGEKIT_WEBKIT (4.0 or 4.1); when unset it
-# falls back to /usr/lib/edgekit/variant, then to 4.0. This one script is shared
-# by the .deb postinst and the .run installer.
+# falls back to /usr/lib/edgekit/variant, then to the copy next to this script,
+# then to 4.0. This one script is shared by the .deb postinst and the .run
+# installer.
+#
+# A requirement may list alternative package names separated by '|' (Ubuntu
+# 24.04 renamed libgtk-3-0 to libgtk-3-0t64 for the 64-bit time_t transition,
+# keeping the old name only as a virtual Provides).
 set -u
 
 WEBKIT="${EDGEKIT_WEBKIT:-}"
@@ -14,39 +19,50 @@ if [ -z "$WEBKIT" ] && [ -r /usr/lib/edgekit/variant ]; then
 	WEBKIT=$(cat /usr/lib/edgekit/variant)
 fi
 if [ -z "$WEBKIT" ]; then
-	# Installed alongside this script (the .run layout).
 	here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 	[ -r "$here/variant" ] && WEBKIT=$(cat "$here/variant")
 fi
 case "$WEBKIT" in
 4.1)
 	WEBKIT_LIB="libwebkit2gtk-4.1"
-	REQUIRED="libgtk-3-0:3.24 libwebkit2gtk-4.1-0:2.42 libstdc++6:12"
+	REQUIRED="libgtk-3-0t64|libgtk-3-0:3.24 libwebkit2gtk-4.1-0:2.42 libstdc++6:12"
 	;;
 *)
 	WEBKIT="4.0"
 	WEBKIT_LIB="libwebkit2gtk-4.0"
-	REQUIRED="libgtk-3-0:3.24 libwebkit2gtk-4.0-37:2.36 libstdc++6:12"
+	REQUIRED="libgtk-3-0|libgtk-3-0t64:3.24 libwebkit2gtk-4.0-37:2.36 libstdc++6:12"
 	;;
 esac
 
-# Version a package must have at least; checked with dpkg when available.
 missing=0
 echo "EdgeKit 依赖检查（WebKitGTK $WEBKIT）："
 
 if command -v dpkg-query >/dev/null 2>&1; then
 	printf '  %-28s %-8s %s\n' "软件包" "状态" "已装版本"
 	for spec in $REQUIRED; do
-		pkg=${spec%%:*}
+		alts=${spec%%:*}
 		min=${spec#*:}
-		got=$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || true)
+		got=""
+		used=""
+		saveifs=$IFS
+		IFS='|'
+		for cand in $alts; do
+			v=$(dpkg-query -W -f='${Version}' "$cand" 2>/dev/null || true)
+			if [ -n "$v" ]; then
+				got=$v
+				used=$cand
+				break
+			fi
+		done
+		IFS=$saveifs
 		if [ -z "$got" ]; then
-			printf '  %-28s %-8s %s\n' "$pkg" "缺失" "需要 >= $min"
+			label=$(printf '%s' "$alts" | tr '|' '/')
+			printf '  %-28s %-8s %s\n' "$label" "缺失" "需要 >= $min"
 			missing=1
 		elif dpkg --compare-versions "$got" ge "$min" 2>/dev/null; then
-			printf '  %-28s %-8s %s\n' "$pkg" "满足" "$got"
+			printf '  %-28s %-8s %s\n' "$used" "满足" "$got"
 		else
-			printf '  %-28s %-8s %s\n' "$pkg" "过旧" "$got（需要 >= $min）"
+			printf '  %-28s %-8s %s\n' "$used" "过旧" "$got（需要 >= $min）"
 			missing=1
 		fi
 	done
@@ -64,14 +80,15 @@ else
 fi
 
 if [ "$missing" -ne 0 ]; then
+	# First alternative of each requirement, for the apt hint.
+	pkgs=""
+	for spec in $REQUIRED; do
+		pkgs="$pkgs $(printf '%s' "${spec%%:*}" | cut -d'|' -f1)"
+	done
 	echo
 	echo "  缺少或过旧的依赖会导致 EdgeKit 无法启动。"
 	echo "  Ubuntu / Debian 可执行："
-	if [ "$WEBKIT" = "4.1" ]; then
-		echo "    sudo apt update && sudo apt install -y libgtk-3-0 libwebkit2gtk-4.1-0 libstdc++6"
-	else
-		echo "    sudo apt update && sudo apt install -y libgtk-3-0 libwebkit2gtk-4.0-37 libstdc++6"
-	fi
+	echo "    sudo apt update && sudo apt install -y$pkgs"
 	exit 1
 fi
 
