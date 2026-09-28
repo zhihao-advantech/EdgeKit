@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=EdgeKit
+GenericName=Edge Device Debugging Console
+Comment=AI-accelerated edge device debugging (serial / SSH / SFTP / agent)
+Comment[zh_CN]=AI 加速端侧设备调试（串口 / SSH / SFTP / Agent）
+Exec=edgekit
+Icon=edgekit
+Terminal=false
+Categories=Development;IDE;Utility;
+Keywords=serial;ssh;sftp;debug;embedded;agent;mcp;
+StartupNotify=true

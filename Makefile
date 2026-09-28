@@ -36,7 +36,7 @@ export CGO_LDFLAGS
 PKGDIR ?= packaging
 DIST   ?= dist
 
-.PHONY: all build run headless vet tidy fmt clean shim info
+.PHONY: all build run headless vet tidy fmt clean shim info package-deb
 
 all: build
 
@@ -72,3 +72,7 @@ info:
 	@echo "version: $(VERSION)"
 	@echo "webkit:  $(WEBKIT) (tags: $(BUILD_TAGS))"
 	@echo "bin:     $(BIN)"
+
+# Debian package (declares system dependencies and prints a verified table).
+package-deb: build
+	VERSION="$(VERSION)" WEBKIT="$(WEBKIT)" DIST="$(DIST)" $(PKGDIR)/make-deb.sh

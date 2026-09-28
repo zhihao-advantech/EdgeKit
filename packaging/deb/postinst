@@ -1,0 +1,36 @@
+#!/bin/sh
+# EdgeKit post-install: verify runtime dependencies, refresh desktop caches and
+# print how to launch and connect an MCP agent.
+set -e
+
+if [ "$1" = "configure" ]; then
+	echo "EdgeKit @VERSION@ 安装中…"
+
+	if [ -x /usr/lib/edgekit/check-deps.sh ]; then
+		if ! /usr/lib/edgekit/check-deps.sh; then
+			echo "  警告：部分依赖未满足，EdgeKit 可能无法启动。"
+		fi
+	fi
+
+	if command -v update-desktop-database >/dev/null 2>&1; then
+		update-desktop-database -q /usr/share/applications || true
+	fi
+	if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+		gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+	fi
+
+	cat <<'EOF'
+
+安装完成。启动方式：
+  · 应用菜单搜索 “EdgeKit”，或命令行运行：edgekit
+  · 无图形环境（服务器 / 远程）：edgekit -headless
+
+串口权限（把当前用户加入 dialout 组后重新登录，只需一次）：
+  sudo usermod -aG dialout "$USER"
+
+接入外部 AI Agent（需先启动 EdgeKit）：
+  openclaw mcp add edgekit --command edgekit --arg mcp
+EOF
+fi
+
+exit 0

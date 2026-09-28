@@ -1,0 +1,19 @@
+Package: edgekit
+Version: @VERSION@
+Section: devel
+Priority: optional
+Architecture: @ARCH@
+Depends: @DEPENDS@
+Maintainer: @MAINTAINER@
+Installed-Size: @SIZE@
+Homepage: https://github.com/zhihao-advantech/EdgeKit
+Description: AI-accelerated edge device debugging console
+ EdgeKit is a desktop application for debugging and upgrading edge devices.
+ It combines an AI agent session with a serial console, an SSH terminal, SFTP
+ file browsing and a local workspace, and can drive several boards at once.
+ .
+ The web UI is embedded in the binary and runs in a native WebKit2GTK window,
+ so no browser or external file is needed. The `edgekit mcp` subcommand exposes
+ the same tool surface to external MCP agents (OpenClaw, Claude Code, ...).
+ .
+ This build targets @WEBKIT_DESC@.
