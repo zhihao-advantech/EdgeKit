@@ -66,10 +66,16 @@ func (k timelineKit) Tools() []kit.Tool {
 					return "", fmt.Errorf("正则表达式无效: %w", err)
 				}
 				channel := argString(args, "channel")
+				var channels []string
 				switch channel {
-				case "", timeline.ChannelSerial, timeline.ChannelSSH:
+				case "":
+					// Device output only: never match the agent's own audit
+					// records (whose data quotes tool arguments).
+					channels = []string{timeline.ChannelSerial, timeline.ChannelSSH}
+				case timeline.ChannelSerial, timeline.ChannelSSH:
+					channels = []string{channel}
 				default:
-					return "", fmt.Errorf("channel 无效: %q（可用: serial / ssh，留空表示不限）", channel)
+					return "", fmt.Errorf("channel 无效: %q（可用: serial / ssh，留空表示串口+SSH）", channel)
 				}
 				kind := argString(args, "kind")
 
@@ -100,7 +106,7 @@ func (k timelineKit) Tools() []kit.Tool {
 				} else {
 					after = 0
 				}
-				f := timeline.Filter{Channel: channel, Kind: kind, Pattern: re, AfterSeq: after}
+				f := timeline.Filter{Channels: channels, Kind: kind, Pattern: re, AfterSeq: after}
 				for _, r := range k.tl.Since(ctx, after, 0) {
 					if f.Match(r) {
 						return k.matchedReport(pattern, r), nil

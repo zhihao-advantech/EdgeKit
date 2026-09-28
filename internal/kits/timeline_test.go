@@ -92,6 +92,26 @@ func TestWaitForOutputTimeoutTailsRecords(t *testing.T) {
 	}
 }
 
+func TestWaitForOutputIgnoresAuditRecords(t *testing.T) {
+	tl := timeline.New(100)
+	// The host audits every tool call (including this one's arguments) on the
+	// agent channel; a wait for device output must not match that echo.
+	tl.Append(timeline.Record{
+		Channel: timeline.ChannelAgent, Kind: "action",
+		Data: []byte(`wait_for_output {"pattern":"kernel ready"}`),
+	})
+	reg := timelineRegistry(tl)
+	w := tool(t, reg, "wait_for_output")
+
+	out, err := w.Call(context.Background(), map[string]any{"pattern": "kernel ready", "timeout_ms": 50})
+	if err != nil {
+		t.Fatalf("wait_for_output: %v", err)
+	}
+	if !strings.Contains(out, "等待超时") {
+		t.Fatalf("audit record must not satisfy the wait: %q", out)
+	}
+}
+
 func TestWaitForOutputValidatesArguments(t *testing.T) {
 	tl := timeline.New(10)
 	reg := timelineRegistry(tl)

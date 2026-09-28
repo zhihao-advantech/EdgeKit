@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 )
@@ -36,7 +37,8 @@ type Record struct {
 
 // Filter selects records. A zero Filter matches everything.
 type Filter struct {
-	Channel  string
+	// Channels restricts matching to the listed channels; empty matches any.
+	Channels []string
 	Kind     string
 	AfterSeq uint64
 	Pattern  *regexp.Regexp // matched against Data
@@ -44,7 +46,7 @@ type Filter struct {
 
 // Match reports whether r passes the filter.
 func (f Filter) Match(r Record) bool {
-	if f.Channel != "" && r.Channel != f.Channel {
+	if len(f.Channels) > 0 && !slices.Contains(f.Channels, r.Channel) {
 		return false
 	}
 	if f.Kind != "" && r.Kind != f.Kind {
