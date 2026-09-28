@@ -10,7 +10,7 @@ and workspace file management — and can talk to **several boards at once**.
 
 The UI is written in HTML/CSS/JS and **embedded in the executable**. Running the
 program opens it directly in a native window through **WebKit2GTK**
-(`libwebkit2gtk-4.0`) — no browser, no URL to visit. Go provides the backend, and
+(`libwebkit2gtk-4.0` / `4.1`) — no browser, no URL to visit. Go provides the backend, and
 the two communicate over a loopback JSON / WebSocket protocol.
 
 ```
@@ -342,11 +342,17 @@ Measured (Node, pure string handling):
 ## Requirements
 
 - Go 1.22+
-- GTK 3 and WebKit2GTK 4.0 development libraries:
+- GTK 3 and WebKit2GTK development libraries: Ubuntu 22.04 / Debian 12 ship
+  **4.0**, Ubuntu 24.04+ / Debian 13+ ship only **4.1** (the build detects it):
 
 ```bash
+# Ubuntu 22.04 / Debian 12
 sudo apt update
 sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-dev
+
+# Ubuntu 24.04+ / Debian 13+
+sudo apt update
+sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 ```
 
 Serial access (add your user to the `dialout` group, then log in again):
@@ -358,10 +364,18 @@ sudo usermod -aG dialout "$USER"
 ## Build and run
 
 ```bash
-make build          # produces build/edgekit
+make build          # produces build/edgekit (WebKit 4.0 / 4.1 auto-detected)
 ./build/edgekit     # opens the window directly
 
 make run            # go run
+make headless       # backend only, no window (servers / remote debugging)
+```
+
+The WebKit variant is auto-detected via `pkg-config`; force it with `WEBKIT`:
+
+```bash
+make WEBKIT=4.1 build   # build the 4.1 variant explicitly
+make info               # show the version and WebKit variant to be built
 ```
 
 Command-line flags:
@@ -370,13 +384,45 @@ Command-line flags:
 | --- | --- |
 | `-addr` | internal WebSocket listen address, default `127.0.0.1:0` (random port, UI only) |
 | `-debug` | open the WebView developer tools |
+| `-headless` | backend only, no window (no display / remote) |
 
 Running it pops up the app window; all UI assets are embedded, so no browser or
-external files are needed. A graphical environment (X11 / Wayland) is required.
+external files are needed. A graphical environment (X11 / Wayland) is required;
+use `-headless` without one.
+
+## Packaging and installation
+
+Both installers **verify the required system package versions**:
+
+- **`.deb`**: declares system dependencies (`Depends`) for apt/dpkg to resolve and
+  prints a verified table on install;
+- **`.run`**: a self-extracting installer that checks the dependencies itself and
+  supports `--prefix` / `--uninstall`.
+
+```bash
+make package-deb    # dist/edgekit_<version>_<arch>.deb
+make package-run    # dist/EdgeKit-<version>-webkit<4.0|4.1>-<arch>.run
+make package        # both
+```
+
+Install:
+
+```bash
+sudo apt install ./dist/edgekit_<version>_<arch>.deb   # resolves dependencies
+
+./dist/EdgeKit-<version>-webkit<4.0|4.1>-<arch>.run    # /usr/local as root, ~/.local otherwise
+./EdgeKit-*.run --check                                # dependency check only
+./EdgeKit-*.run --uninstall                            # remove
+```
+
+> WebKitGTK is ABI-incompatible between 4.0 and 4.1, and Ubuntu 24.04+ ships only
+> 4.1, so **the package must be built per target**: `WEBKIT=4.0` on 22.04,
+> `WEBKIT=4.1` on 24.04+. GTK/WebKit cannot be statically linked; the binary links
+> the system libraries, and the packages declare and verify those dependencies.
 
 ## About the `GLIBCXX_3.4.30` link error
 
-Some distributions build `libwebkit2gtk-4.0` with a newer GCC while the `libstdc++`
+Some distributions build `libwebkit2gtk-4.0` (or 4.1) with a newer GCC while the `libstdc++`
 in the default `g++` search path is older, which fails the link with:
 
 ```

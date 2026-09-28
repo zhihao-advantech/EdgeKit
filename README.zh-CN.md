@@ -8,7 +8,7 @@
 AI Agent、串口调试、SSH 终端、工作区文件管理，支持**同时连接多块板**。
 
 界面使用 HTML/CSS/JS 编写，**内嵌在可执行文件中**，运行程序即由 **WebKit2GTK**
-（`libwebkit2gtk-4.0`）在原生窗口里直接打开，无需浏览器、无需手动访问任何地址。
+（`libwebkit2gtk-4.0` / `4.1`）在原生窗口里直接打开，无需浏览器、无需手动访问任何地址。
 后端由 Go 提供各项能力，二者通过本机回环地址上的 JSON / WebSocket 协议通信。
 
 ```
@@ -280,11 +280,17 @@ ln -s "$PWD/skills/edgekit-board-debug" ~/.agents/skills/edgekit-board-debug
 ## 环境要求
 
 - Go 1.22+
-- GTK 3 与 WebKit2GTK 4.0 开发库：
+- GTK 3 与 WebKit2GTK 开发库：Ubuntu 22.04 / Debian 12 提供 **4.0**，
+  Ubuntu 24.04+ / Debian 13+ 只提供 **4.1**（构建脚本会自动探测）：
 
 ```bash
+# Ubuntu 22.04 / Debian 12
 sudo apt update
 sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-dev
+
+# Ubuntu 24.04+ / Debian 13+
+sudo apt update
+sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 ```
 
 串口访问权限（把当前用户加入 `dialout` 组后重新登录）：
@@ -296,10 +302,18 @@ sudo usermod -aG dialout "$USER"
 ## 构建与运行
 
 ```bash
-make build          # 生成 build/edgekit
+make build          # 生成 build/edgekit（按本机 WebKit 版本自动选择 4.0 / 4.1）
 ./build/edgekit     # 直接打开界面窗口
 
 make run            # go run
+make headless       # 只运行后端，不打开窗口（服务器 / 远程调试）
+```
+
+WebKit 版本由 `pkg-config` 自动探测；需要显式指定或交叉构建时用 `WEBKIT`：
+
+```bash
+make WEBKIT=4.1 build   # 强制构建 4.1 变体
+make info               # 查看将要构建的版本与 WebKit 变体
 ```
 
 命令行参数：
@@ -308,13 +322,41 @@ make run            # go run
 | --- | --- |
 | `-addr` | 内部 WebSocket 监听地址，默认 `127.0.0.1:0`（随机端口，仅供界面通信） |
 | `-debug` | 打开 WebView 开发者工具 |
+| `-headless` | 只运行后端服务，不打开窗口（无图形环境 / 远程） |
 
 运行后会直接弹出应用窗口，界面资源全部内嵌，不依赖浏览器或外部文件。
-需要在图形环境下运行（X11 / Wayland）。
+需要在图形环境下运行（X11 / Wayland）；无图形环境用 `-headless`。
+
+## 打包与安装
+
+提供两种安装包，**都会检查运行时依赖的版本**：
+
+- **`.deb`**：用 `Depends` 声明系统依赖，apt/dpkg 负责解析，安装时打印校验表；
+- **`.run`**：自解压安装器，安装前自己检查依赖，支持 `--prefix` / `--uninstall`。
+
+```bash
+make package-deb    # dist/edgekit_<版本>_<架构>.deb
+make package-run    # dist/EdgeKit-<版本>-webkit<4.0|4.1>-<架构>.run
+make package        # 两种都生成
+```
+
+安装：
+
+```bash
+sudo apt install ./dist/edgekit_<版本>_<架构>.deb   # 自动解析并安装依赖
+
+./dist/EdgeKit-<版本>-webkit<4.0|4.1>-<架构>.run    # root 装到 /usr/local，普通用户装到 ~/.local
+./EdgeKit-*.run --check                             # 只做依赖检查，不安装
+./EdgeKit-*.run --uninstall                         # 卸载
+```
+
+> WebKitGTK 的 ABI 在 4.0 与 4.1 之间不兼容，且 Ubuntu 24.04 起只提供 4.1，
+> 因此**需要按系统分别打包**：22.04 用 `WEBKIT=4.0`，24.04+ 用 `WEBKIT=4.1`。
+> GTK/WebKit 无法静态链接，二进制动态链接系统库，依赖由安装包声明与检查。
 
 ## 关于链接错误 `GLIBCXX_3.4.30`
 
-部分发行版的 `libwebkit2gtk-4.0` 使用较新的 GCC 构建，而默认 `g++` 搜索路径中的
+部分发行版的 `libwebkit2gtk-4.0`（或 4.1）使用较新的 GCC 构建，而默认 `g++` 搜索路径中的
 `libstdc++` 较旧，链接时会报：
 
 ```
@@ -345,6 +387,8 @@ internal/sftpx/         SFTP 文件浏览与传输（挂在 SSH 连接上）
 internal/workspace/     本地工作区（沙箱化文件操作）
 internal/server/        HTTP + WebSocket 服务，连接前后端
 internal/server/web/    内嵌的前端资源（HTML/CSS/JS）
+packaging/              .deb / .run 打包脚本、依赖检查、desktop 入口
+third_party/webview_go/ 打了 WebKit 4.0/4.1 build tag 的 webview fork
 ```
 
 ## WebSocket 协议
