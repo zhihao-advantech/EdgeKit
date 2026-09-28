@@ -117,3 +117,49 @@ func TestHandleToolCallRecordsTimeline(t *testing.T) {
 		}
 	}
 }
+
+// TestHandleToolCallAddressesSession drives the shared `session` argument
+// end-to-end: the same tool acts on different boards by id.
+func TestHandleToolCallAddressesSession(t *testing.T) {
+	s := newToolCallServer()
+	tl1 := timeline.New(10)
+	tl1.Append(timeline.Record{Channel: timeline.ChannelSerial, Kind: "rx", Data: []byte("board-A ready")})
+	tl2 := timeline.New(10)
+	tl2.Append(timeline.Record{Channel: timeline.ChannelSerial, Kind: "rx", Data: []byte("board-B ready")})
+	s.registerSession(&deviceSession{id: "serial-1", kind: "serial", label: "ttyUSB0", serial: serial.New(nil), tl: tl1})
+	s.registerSession(&deviceSession{id: "serial-2", kind: "serial", label: "ttyUSB1", serial: serial.New(nil), tl: tl2})
+
+	// Without a session argument the call acts on the focused session.
+	res := callTool(t, s, "1", "wait_for_output", map[string]any{"pattern": "board-A ready", "timeout_ms": 200})
+	if !res.OK || !strings.Contains(res.Output, "board-A") {
+		t.Fatalf("focused call should read serial-1, got %+v", res)
+	}
+
+	// An explicit session targets another board.
+	res = callTool(t, s, "2", "wait_for_output", map[string]any{"pattern": "board-B ready", "session": "serial-2", "timeout_ms": 200})
+	if !res.OK || !strings.Contains(res.Output, "board-B") {
+		t.Fatalf("session=serial-2 should read serial-2, got %+v", res)
+	}
+	// The audit record followed the target session too.
+	var sawAudit bool
+	for _, r := range tl2.Since(0, 0) {
+		if r.Channel == timeline.ChannelAgent && strings.Contains(string(r.Data), "wait_for_output") {
+			sawAudit = true
+		}
+	}
+	if !sawAudit {
+		t.Fatal("audit record should land on the targeted session's timeline")
+	}
+
+	// An unknown session is rejected with the available ids.
+	res = callTool(t, s, "3", "wait_for_output", map[string]any{"pattern": "x", "session": "nope", "timeout_ms": 100})
+	if res.OK || !strings.Contains(res.Error, "未知设备会话") {
+		t.Fatalf("unknown session should fail, got %+v", res)
+	}
+
+	// The directory exposes both sessions for discovery.
+	res = callTool(t, s, "4", "sessions_list", nil)
+	if !res.OK || !strings.Contains(res.Output, "serial-1") || !strings.Contains(res.Output, "serial-2") {
+		t.Fatalf("sessions_list should list both sessions, got %+v", res)
+	}
+}

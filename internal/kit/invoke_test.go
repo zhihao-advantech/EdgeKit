@@ -72,3 +72,30 @@ func TestInvokePropagatesToolError(t *testing.T) {
 		t.Fatal("tool error should propagate")
 	}
 }
+
+func TestInvokeCarriesSessionArgument(t *testing.T) {
+	var got string
+	tool := Tool{
+		Name: "t",
+		Call: func(ctx context.Context, args map[string]any) (string, error) {
+			got = SessionFrom(ctx)
+			return "ok", nil
+		},
+	}
+
+	if _, err := tool.Invoke(context.Background(), map[string]any{"session": "serial-2"}, time.Minute); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if got != "serial-2" {
+		t.Fatalf("session = %q, want serial-2", got)
+	}
+
+	// Without the argument the capabilities resolve the focused session.
+	got = "unset"
+	if _, err := tool.Invoke(context.Background(), map[string]any{}, time.Minute); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("session = %q, want empty (focused)", got)
+	}
+}

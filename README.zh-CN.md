@@ -28,7 +28,7 @@ AI Agent、串口调试、SSH 终端、工作区文件管理，支持**同时连
 
 能力以 **Kit**（能力包）形式提供，宿主（Host）聚合各 Kit 贡献的工具，**内置 Agent、UI 协议与后续的 MCP Server 共用同一份定义**：
 
-- 内置 Kit：`Host`、`Network`、`Serial`、`SSH`、`SFTP`、`Workspace`、`CodeEdit`、`Timeline`，共 24 个工具
+- 内置 Kit：`Host`、`Network`、`Serial`、`SSH`、`SFTP`、`Workspace`、`CodeEdit`、`Timeline`、`Sessions`，共 25 个工具
 - 每个 Kit 带 `Manifest`（`id` / `name` / `version` / `license` / `runtime` / `activation`）
   与一组 `Tool`（JSON Schema + 风险等级 `read` / `mutate` / `dangerous`）
 - **`activation` 已生效**：声明 `onDeviceKind:serial` / `onDeviceKind:ssh` 的 Kit 在
@@ -127,7 +127,7 @@ EdgeKit 可以作为一个 **MCP 工具服务**被外部 Agent 驱动：`edgekit
 
 # 2) 加入 OpenClaw（add 会先连上探活、成功后才保存）
 openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
-openclaw mcp probe edgekit        # -> edgekit: 24 tools
+openclaw mcp probe edgekit        # -> edgekit: 25 tools
 ```
 
 - 协议：MCP（JSON-RPC 2.0 over stdio），实现 `initialize` / `tools/list` / `tools/call`
@@ -201,10 +201,15 @@ ln -s "$PWD/skills/edgekit-board-debug" ~/.agents/skills/edgekit-board-debug
   `workspace_list` / `workspace_read` / `workspace_write`、
   `code_patch` / `code_diff` / `code_deploy` / `code_run` / `code_revert`（闭环调试：
   改代码 → 审查 diff → 部署到板端 → 运行验证 → 失败回退）、
-  `wait_for_output`（等待设备输出匹配，见「设备模型与时间线」）。
+  `wait_for_output`（等待设备输出匹配，见「设备模型与时间线」）、
+  `sessions_list`（会话目录，见下「多板寻址」）。
 - **安全确认**：只读工具自动执行；写串口、执行命令、上传文件等**修改性操作会先弹出确认**，
   用户点「允许执行」后才会运行（可勾选「自动执行修改性操作」跳过确认）。
 - **上下文感知**：Agent 知道当前串口 / SSH 是否已连接及目标，直接复用已建立的会话，下载落到本地工作区。
+- **多板寻址**：`sessions_list` 列出所有设备会话（id / 类型 / 状态 / 标签）；
+  设备工具可带 `session` 参数指定目标板（`ssh_exec`、`serial_write`、`sftp_*`、
+  `wait_for_output` 等），不带时作用于当前聚焦会话；系统提示也会列出会话 id。
+  未知 id 会返回可用列表，避免误操作到别的板。
 - **快捷指令**：设备巡检 / 系统日志 / 磁盘 / 内存 / 系统版本。
 - 会话记录、工具调用与结果都会以对话卡片形式保留在面板中。
 
@@ -332,7 +337,7 @@ internal/policy/        审批策略门（read / mutate / dangerous）
 internal/mcp/           最小 MCP server（JSON-RPC 2.0 over stdio）
 internal/runtime/       运行端点发布（供 edgekit mcp 发现 App）
 internal/kit/           Kit 扩展模型（Manifest / Tool / Registry / 能力接口）
-internal/kits/          内置 Kit（Host / Network / Serial / SSH / SFTP / Workspace）
+internal/kits/          内置 Kit（Host / Network / Serial / SSH / SFTP / Workspace / CodeEdit / Timeline / Sessions）
 internal/agent/         AI Agent（消费 Registry、Normal 模式、模型调用、审批）
 internal/acp/           最小 ACP 客户端（JSON-RPC 2.0 over stdio）
 internal/netdiag/       网络检查（ping / 端口 / DNS / 本机信息）

@@ -43,12 +43,12 @@ func (k sftpKit) Tools() []kit.Tool {
 			Name:        "sftp_list",
 			Description: "列出 SFTP 远端目录内容",
 			Risk:        kit.RiskRead,
-			Schema:      obj(map[string]any{"path": strType()}, "path"),
+			Schema:      deviceObj(map[string]any{"path": strType()}, "path"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsConnected() {
 					return "", fmt.Errorf("SFTP 未连接")
 				}
-				entries, err := k.s.List(argString(args, "path"))
+				entries, err := k.s.List(ctx, argString(args, "path"))
 				if err != nil {
 					return "", err
 				}
@@ -67,13 +67,13 @@ func (k sftpKit) Tools() []kit.Tool {
 			Name:        "sftp_download",
 			Description: "把远端文件下载到本地工作区，返回本地路径",
 			Risk:        kit.RiskMutate,
-			Schema:      obj(map[string]any{"path": strType()}, "path"),
+			Schema:      deviceObj(map[string]any{"path": strType()}, "path"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsConnected() {
 					return "", fmt.Errorf("SFTP 未就绪（请先连接 SSH）")
 				}
 				remote := argString(args, "path")
-				data, err := k.s.Download(remote)
+				data, err := k.s.Download(ctx, remote)
 				if err != nil {
 					return "", err
 				}
@@ -88,13 +88,13 @@ func (k sftpKit) Tools() []kit.Tool {
 			Name:        "sftp_upload",
 			Description: "把文本内容写入 SFTP 远端文件",
 			Risk:        kit.RiskMutate,
-			Schema:      obj(map[string]any{"path": strType(), "content": strType()}, "path", "content"),
+			Schema:      deviceObj(map[string]any{"path": strType(), "content": strType()}, "path", "content"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsConnected() {
 					return "", fmt.Errorf("SFTP 未连接")
 				}
 				path := argString(args, "path")
-				if err := k.s.Upload(path, []byte(argString(args, "content"))); err != nil {
+				if err := k.s.Upload(ctx, path, []byte(argString(args, "content"))); err != nil {
 					return "", err
 				}
 				return "已写入 " + path, nil

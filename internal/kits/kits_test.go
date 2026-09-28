@@ -24,11 +24,11 @@ func activateDevices(reg *kit.Registry) {
 func TestBuiltinKitsContributeTools(t *testing.T) {
 	reg := buildRegistry()
 	activateDevices(reg)
-	if got := len(reg.Tools()); got != 24 {
-		t.Fatalf("expected 24 tools from the built-in kits, got %d", got)
+	if got := len(reg.Tools()); got != 25 {
+		t.Fatalf("expected 25 tools from the built-in kits, got %d", got)
 	}
-	if got := len(reg.Manifests()); got != 8 {
-		t.Fatalf("expected 8 kits, got %d", got)
+	if got := len(reg.Manifests()); got != 9 {
+		t.Fatalf("expected 9 kits, got %d", got)
 	}
 }
 
@@ -36,7 +36,7 @@ func TestDeviceKindActivation(t *testing.T) {
 	reg := buildRegistry()
 	// No device session: only the always-on kits are exposed.
 	const (
-		alwaysOn = 13 // host 2 + net 3 + workspace 3 + codeedit 5
+		alwaysOn = 14 // host 2 + net 3 + workspace 3 + codeedit 5 + sessions 1
 		serial   = 4
 		ssh      = 2
 		sftp     = 4
@@ -77,7 +77,7 @@ func TestDeviceKindActivation(t *testing.T) {
 		t.Fatal("ssh tools must stay exposed")
 	}
 	// The manifest is still listed so the UI can show the kit.
-	if got := len(reg.Manifests()); got != 8 {
+	if got := len(reg.Manifests()); got != 9 {
 		t.Fatalf("manifests must stay listed, got %d", got)
 	}
 }
@@ -115,7 +115,7 @@ func TestToolRiskClassification(t *testing.T) {
 	}
 	readOnly := []string{"local_info", "net_ping", "net_check_port", "net_resolve",
 		"serial_status", "serial_read", "ssh_status", "sftp_status", "sftp_list",
-		"workspace_list", "workspace_read", "code_diff", "wait_for_output"}
+		"workspace_list", "workspace_read", "code_diff", "wait_for_output", "sessions_list"}
 	for _, name := range readOnly {
 		tool, ok := reg.Tool(name)
 		if !ok {
@@ -142,7 +142,7 @@ func TestRegistryIgnoresDuplicateToolNames(t *testing.T) {
 func TestKitActivation(t *testing.T) {
 	reg := buildRegistry()
 	activateDevices(reg)
-	const all = 24
+	const all = 25
 	if got := len(reg.Tools()); got != all {
 		t.Fatalf("all kits enabled should expose %d tools, got %d", all, got)
 	}

@@ -46,7 +46,7 @@ func (k timelineKit) Tools() []kit.Tool {
 				" 条记录（lookback 可调），因此两次调用之间到达的输出不会错过；" +
 				"超时返回最近几条记录以便判断设备状态。",
 			Risk: kit.RiskRead,
-			Schema: obj(map[string]any{
+			Schema: deviceObj(map[string]any{
 				"pattern":    strType(),
 				"channel":    strType(),
 				"kind":       strType(),
@@ -93,7 +93,7 @@ func (k timelineKit) Tools() []kit.Tool {
 				// lookback window first, then block for anything newer.
 				// `last` is captured before the scan, so records appended in
 				// between are still caught by Wait's own re-scan.
-				last := k.tl.LastSeq()
+				last := k.tl.LastSeq(ctx)
 				after := last
 				if after > uint64(lookback) {
 					after -= uint64(lookback)
@@ -101,7 +101,7 @@ func (k timelineKit) Tools() []kit.Tool {
 					after = 0
 				}
 				f := timeline.Filter{Channel: channel, Kind: kind, Pattern: re, AfterSeq: after}
-				for _, r := range k.tl.Since(after, 0) {
+				for _, r := range k.tl.Since(ctx, after, 0) {
 					if f.Match(r) {
 						return k.matchedReport(pattern, r), nil
 					}
@@ -110,7 +110,7 @@ func (k timelineKit) Tools() []kit.Tool {
 				rec, err := k.tl.Wait(ctx, f, timeout)
 				if err != nil {
 					if errors.Is(err, timeline.ErrTimeout) {
-						return k.timeoutReport(pattern, channel, kind, timeout), nil
+						return k.timeoutReport(ctx, pattern, channel, kind, timeout), nil
 					}
 					return "", err
 				}
@@ -131,11 +131,11 @@ func (k timelineKit) matchedReport(pattern string, rec timeline.Record) string {
 
 // timeoutReport explains a timeout and tails the newest records so the brain
 // can see what the device actually printed and re-plan.
-func (k timelineKit) timeoutReport(pattern, channel, kind string, timeout time.Duration) string {
+func (k timelineKit) timeoutReport(ctx context.Context, pattern, channel, kind string, timeout time.Duration) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "等待超时（%.0fs）：未出现匹配 %s 的记录（channel=%s kind=%s）。\n",
 		timeout.Seconds(), pattern, channel, kind)
-	records := k.tl.Since(0, 4)
+	records := k.tl.Since(ctx, 0, 4)
 	if len(records) == 0 {
 		b.WriteString("等待期间没有收到任何设备输出。")
 		return b.String()

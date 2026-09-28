@@ -58,6 +58,11 @@ type callResult struct {
 // goroutine itself finishes naturally in the background). timeout <= 0 bounds
 // the call by ctx alone.
 func (t Tool) Invoke(ctx context.Context, args map[string]any, timeout time.Duration) (string, error) {
+	// A shared `session` argument routes the call to a specific device session;
+	// without it the capabilities resolve the focused one.
+	if id, _ := args["session"].(string); id != "" {
+		ctx = WithSession(ctx, id)
+	}
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -137,43 +142,45 @@ func DeviceKindEvent(kind string) string { return eventDeviceKindPrefix + kind }
 /* ------------------------------------------------------------------ *
  * capabilities the built-in kits operate on
  *
- * They are implemented by the host's focused-session proxies, so a tool call
- * always resolves the currently selected device.
+ * They are implemented by the host's session proxies. Action methods take a
+ * context so a call can target a specific device session (kit.WithSession);
+ * status methods report the focused session. A tool call always resolves its
+ * device through the context, defaulting to the currently selected one.
  * ------------------------------------------------------------------ */
 
 // Serial is the serial capability.
 type Serial interface {
 	IsOpen() bool
 	Port() string
-	Write(p []byte) error
-	Recent() []byte
-	RunCapture(command string, quiet, timeout time.Duration) (string, error)
+	Write(ctx context.Context, p []byte) error
+	Recent(ctx context.Context) []byte
+	RunCapture(ctx context.Context, command string, quiet, timeout time.Duration) (string, error)
 }
 
 // SSH is the SSH capability.
 type SSH interface {
 	IsConnected() bool
 	Target() string
-	ExecCapture(command string, maxBytes int) (string, error)
+	ExecCapture(ctx context.Context, command string, maxBytes int) (string, error)
 }
 
 // SFTP is the SFTP capability.
 type SFTP interface {
 	IsConnected() bool
-	List(path string) ([]sftpx.Entry, error)
-	Download(path string) ([]byte, error)
-	Upload(path string, data []byte) error
+	List(ctx context.Context, path string) ([]sftpx.Entry, error)
+	Download(ctx context.Context, path string) ([]byte, error)
+	Upload(ctx context.Context, path string, data []byte) error
 }
 
 // Timeline is the device-record capability: the append-only log of everything
-// observed or done on the focused device session. It lets a kit wait for a
-// device output instead of polling (e.g. a boot banner on the serial console),
-// and lets the host audit what was done to the device.
+// observed or done on a device session. It lets a kit wait for a device output
+// instead of polling (e.g. a boot banner on the serial console), and lets the
+// host audit what was done to the device.
 type Timeline interface {
-	Append(r timeline.Record) timeline.Record
+	Append(ctx context.Context, r timeline.Record) timeline.Record
 	Wait(ctx context.Context, f timeline.Filter, timeout time.Duration) (timeline.Record, error)
-	Since(after uint64, limit int) []timeline.Record
-	LastSeq() uint64
+	Since(ctx context.Context, after uint64, limit int) []timeline.Record
+	LastSeq(ctx context.Context) uint64
 }
 
 // Deps bundles the capabilities handed to the built-in kits.
@@ -182,6 +189,9 @@ type Deps struct {
 	SSH      SSH
 	SFTP     SFTP
 	Timeline Timeline
+	// Sessions returns the open device sessions, so a brain can list them and
+	// address one explicitly. Nil when the host has no directory.
+	Sessions func() []SessionInfo
 }
 
 /* ------------------------------------------------------------------ *

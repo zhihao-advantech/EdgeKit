@@ -20,11 +20,26 @@ func tool(t *testing.T, reg *kit.Registry, name string) kit.Tool {
 	return tl
 }
 
+// timelineAdapter adapts the concrete per-session record to the kit capability.
+// The concrete type is session-agnostic; the host proxy applies the routing.
+type timelineAdapter struct{ tl *timeline.Timeline }
+
+func (a timelineAdapter) Append(_ context.Context, r timeline.Record) timeline.Record {
+	return a.tl.Append(r)
+}
+func (a timelineAdapter) Wait(ctx context.Context, f timeline.Filter, timeout time.Duration) (timeline.Record, error) {
+	return a.tl.Wait(ctx, f, timeout)
+}
+func (a timelineAdapter) Since(_ context.Context, after uint64, limit int) []timeline.Record {
+	return a.tl.Since(after, limit)
+}
+func (a timelineAdapter) LastSeq(context.Context) uint64 { return a.tl.LastSeq() }
+
 // timelineRegistry registers the timeline kit with its device-kind activation
 // satisfied, as the host does once a device session exists.
-func timelineRegistry(tl kit.Timeline) *kit.Registry {
+func timelineRegistry(tl *timeline.Timeline) *kit.Registry {
 	reg := kit.NewRegistry()
-	reg.Register(timelineKit{tl})
+	reg.Register(timelineKit{timelineAdapter{tl}})
 	reg.SetEvent(kit.DeviceKindEvent("serial"), true)
 	return reg
 }
@@ -95,7 +110,9 @@ func TestWaitForOutputValidatesArguments(t *testing.T) {
 }
 
 func TestWaitForOutputWithoutDeviceSession(t *testing.T) {
-	reg := timelineRegistry(nil) // activation satisfied, but no focused device
+	reg := kit.NewRegistry()
+	reg.Register(timelineKit{nil}) // activation satisfied, but no focused device
+	reg.SetEvent(kit.DeviceKindEvent("serial"), true)
 	w := tool(t, reg, "wait_for_output")
 	if _, err := w.Call(context.Background(), map[string]any{"pattern": "x"}); err == nil {
 		t.Fatal("no device session should fail")

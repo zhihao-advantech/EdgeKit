@@ -147,13 +147,15 @@ func New() *Server {
 		sessions: make(map[string]*deviceSession),
 		clients:  make(map[*client]struct{}),
 	}
-	// The focused-session proxies are the capabilities every built-in kit and
-	// the agent resolve against, so a tool call always acts on the selected device.
+	// The capability proxies resolve a call's device session from the context
+	// (the shared `session` argument) or fall back to the focused one, so a
+	// tool call always acts on the intended device.
 	s.deps = kit.Deps{
 		Serial:   focusedSerial{s},
 		SSH:      focusedSSH{s},
 		SFTP:     focusedSFTP{s},
 		Timeline: focusedTimeline{s},
+		Sessions: s.sessionsDirectory,
 	}
 	s.kits = kit.NewRegistry()
 	for _, k := range kits.Builtin(s.deps) {
@@ -385,17 +387,76 @@ func (s *Server) setFocus(id string) {
 }
 
 /* ------------------------------------------------------------------ *
- * agent accessors (resolve the focused session on every call)
+ * capability proxies (resolve the focused session, or the one a call names)
  * ------------------------------------------------------------------ */
+
+// sessionFor resolves the device session an action call acts on: the one named
+// by the call's `session` argument (carried in ctx), or the focused session.
+func (s *Server) sessionFor(ctx context.Context) (*deviceSession, error) {
+	if id := kit.SessionFrom(ctx); id != "" {
+		if ds := s.session(id); ds != nil {
+			return ds, nil
+		}
+		return nil, fmt.Errorf("未知设备会话: %s（可用: %s）", id, strings.Join(s.sessionIDs(), ", "))
+	}
+	if ds := s.session(""); ds != nil {
+		return ds, nil
+	}
+	return nil, fmt.Errorf("当前没有设备会话（请先连接串口或 SSH）")
+}
+
+// sessionIDs lists the open session ids, for "unknown session" errors.
+func (s *Server) sessionIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.order...)
+}
+
+// sessionsDirectory returns the open sessions as kit-visible descriptions.
+func (s *Server) sessionsDirectory() []kit.SessionInfo {
+	s.mu.Lock()
+	order := append([]string(nil), s.order...)
+	s.mu.Unlock()
+	out := make([]kit.SessionInfo, 0, len(order))
+	for _, id := range order {
+		ds := s.session(id)
+		if ds == nil {
+			continue
+		}
+		info := kit.SessionInfo{ID: ds.id, Kind: ds.kind, Label: ds.label}
+		switch ds.kind {
+		case "serial":
+			info.Connected = ds.serial != nil && ds.serial.IsOpen()
+		case "ssh", "desktop":
+			info.Connected = ds.ssh != nil && ds.ssh.IsConnected()
+		}
+		out = append(out, info)
+	}
+	return out
+}
 
 type focusedSerial struct{ s *Server }
 
+// manager resolves the focused serial manager (for status queries).
 func (f focusedSerial) manager() *serial.Manager {
 	if ds := f.s.session(""); ds != nil && ds.serial != nil {
 		return ds.serial
 	}
 	return nil
 }
+
+// target resolves the manager an action call acts on.
+func (f focusedSerial) target(ctx context.Context) (*serial.Manager, error) {
+	ds, err := f.s.sessionFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ds.serial == nil {
+		return nil, fmt.Errorf("会话 %s 不是串口会话", ds.id)
+	}
+	return ds.serial, nil
+}
+
 func (f focusedSerial) IsOpen() bool { m := f.manager(); return m != nil && m.IsOpen() }
 func (f focusedSerial) Port() string {
 	if m := f.manager(); m != nil {
@@ -403,23 +464,26 @@ func (f focusedSerial) Port() string {
 	}
 	return ""
 }
-func (f focusedSerial) Write(p []byte) error {
-	if m := f.manager(); m != nil {
-		return m.Write(p)
+func (f focusedSerial) Write(ctx context.Context, p []byte) error {
+	m, err := f.target(ctx)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("串口未打开")
+	return m.Write(p)
 }
-func (f focusedSerial) Recent() []byte {
-	if m := f.manager(); m != nil {
-		return m.Recent()
+func (f focusedSerial) Recent(ctx context.Context) []byte {
+	m, err := f.target(ctx)
+	if err != nil {
+		return nil
 	}
-	return nil
+	return m.Recent()
 }
-func (f focusedSerial) RunCapture(cmd string, quiet, timeout time.Duration) (string, error) {
-	if m := f.manager(); m != nil {
-		return m.RunCapture(cmd, quiet, timeout)
+func (f focusedSerial) RunCapture(ctx context.Context, cmd string, quiet, timeout time.Duration) (string, error) {
+	m, err := f.target(ctx)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("串口未打开")
+	return m.RunCapture(cmd, quiet, timeout)
 }
 
 type focusedSSH struct{ s *Server }
@@ -430,6 +494,18 @@ func (f focusedSSH) manager() *sshclient.Manager {
 	}
 	return nil
 }
+
+func (f focusedSSH) target(ctx context.Context) (*sshclient.Manager, error) {
+	ds, err := f.s.sessionFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ds.ssh == nil {
+		return nil, fmt.Errorf("会话 %s 不是 SSH 会话", ds.id)
+	}
+	return ds.ssh, nil
+}
+
 func (f focusedSSH) IsConnected() bool { m := f.manager(); return m != nil && m.IsConnected() }
 func (f focusedSSH) Target() string {
 	if m := f.manager(); m != nil {
@@ -437,11 +513,12 @@ func (f focusedSSH) Target() string {
 	}
 	return ""
 }
-func (f focusedSSH) ExecCapture(cmd string, maxBytes int) (string, error) {
-	if m := f.manager(); m != nil {
-		return m.ExecCapture(cmd, maxBytes)
+func (f focusedSSH) ExecCapture(ctx context.Context, cmd string, maxBytes int) (string, error) {
+	m, err := f.target(ctx)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("SSH 未连接")
+	return m.ExecCapture(cmd, maxBytes)
 }
 
 type focusedSFTP struct{ s *Server }
@@ -452,64 +529,88 @@ func (f focusedSFTP) manager() *sftpx.Manager {
 	}
 	return nil
 }
-func (f focusedSFTP) IsConnected() bool { m := f.manager(); return m != nil && m.IsConnected() }
-func (f focusedSFTP) List(p string) ([]sftpx.Entry, error) {
-	if m := f.manager(); m != nil {
-		return m.List(p)
+
+func (f focusedSFTP) target(ctx context.Context) (*sftpx.Manager, error) {
+	ds, err := f.s.sessionFor(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("SFTP 未就绪")
-}
-func (f focusedSFTP) Download(p string) ([]byte, error) {
-	if m := f.manager(); m != nil {
-		return m.Download(p)
+	if ds.sftp == nil {
+		return nil, fmt.Errorf("会话 %s 没有 SFTP（请先连接 SSH）", ds.id)
 	}
-	return nil, fmt.Errorf("SFTP 未就绪")
-}
-func (f focusedSFTP) Upload(p string, data []byte) error {
-	if m := f.manager(); m != nil {
-		return m.Upload(p, data)
-	}
-	return fmt.Errorf("SFTP 未就绪")
+	return ds.sftp, nil
 }
 
-// focusedTimeline resolves the focused session's record. Its zero value (no
+func (f focusedSFTP) IsConnected() bool { m := f.manager(); return m != nil && m.IsConnected() }
+func (f focusedSFTP) List(ctx context.Context, p string) ([]sftpx.Entry, error) {
+	m, err := f.target(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return m.List(p)
+}
+func (f focusedSFTP) Download(ctx context.Context, p string) ([]byte, error) {
+	m, err := f.target(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return m.Download(p)
+}
+func (f focusedSFTP) Upload(ctx context.Context, p string, data []byte) error {
+	m, err := f.target(ctx)
+	if err != nil {
+		return err
+	}
+	return m.Upload(p, data)
+}
+
+// focusedTimeline resolves a device session's record. Its zero value (no
 // timeline method set) is not a kit.Timeline, so kits built without a device
 // see a nil capability and report "no device session".
 type focusedTimeline struct{ s *Server }
 
-func (f focusedTimeline) timeline() *timeline.Timeline {
-	if ds := f.s.session(""); ds != nil {
-		return ds.tl
+// target resolves the timeline an action call acts on.
+func (f focusedTimeline) target(ctx context.Context) (*timeline.Timeline, error) {
+	ds, err := f.s.sessionFor(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if ds.tl == nil {
+		return nil, fmt.Errorf("会话 %s 没有设备时间线", ds.id)
+	}
+	return ds.tl, nil
 }
 
-func (f focusedTimeline) Append(r timeline.Record) timeline.Record {
-	if tl := f.timeline(); tl != nil {
-		return tl.Append(r)
+func (f focusedTimeline) Append(ctx context.Context, r timeline.Record) timeline.Record {
+	tl, err := f.target(ctx)
+	if err != nil {
+		return timeline.Record{}
 	}
-	return timeline.Record{}
+	return tl.Append(r)
 }
 
 func (f focusedTimeline) Wait(ctx context.Context, flt timeline.Filter, timeout time.Duration) (timeline.Record, error) {
-	if tl := f.timeline(); tl != nil {
-		return tl.Wait(ctx, flt, timeout)
+	tl, err := f.target(ctx)
+	if err != nil {
+		return timeline.Record{}, err
 	}
-	return timeline.Record{}, fmt.Errorf("当前没有设备会话（请先连接串口或 SSH）")
+	return tl.Wait(ctx, flt, timeout)
 }
 
-func (f focusedTimeline) Since(after uint64, limit int) []timeline.Record {
-	if tl := f.timeline(); tl != nil {
-		return tl.Since(after, limit)
+func (f focusedTimeline) Since(ctx context.Context, after uint64, limit int) []timeline.Record {
+	tl, err := f.target(ctx)
+	if err != nil {
+		return nil
 	}
-	return nil
+	return tl.Since(after, limit)
 }
 
-func (f focusedTimeline) LastSeq() uint64 {
-	if tl := f.timeline(); tl != nil {
-		return tl.LastSeq()
+func (f focusedTimeline) LastSeq(ctx context.Context) uint64 {
+	tl, err := f.target(ctx)
+	if err != nil {
+		return 0
 	}
-	return 0
+	return tl.LastSeq()
 }
 
 /* ------------------------------------------------------------------ *
@@ -1018,24 +1119,26 @@ func (s *Server) handleToolCall(c *client, msg message) {
 	}
 	argBytes, _ := json.Marshal(p.Args)
 	argText := string(argBytes)
+	// Audit records follow the call's target session (empty = focused).
+	auditID, _ := p.Args["session"].(string)
 
-	// Audit: record the request on the focused device's timeline (best effort).
-	s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "action", Data: []byte(p.Name + " " + argText)})
+	// Audit: record the request on the target device's timeline (best effort).
+	s.record(auditID, timeline.Record{Channel: timeline.ChannelAgent, Kind: "action", Data: []byte(p.Name + " " + argText)})
 
 	ctx, cancel := context.WithTimeout(context.Background(), kit.DefaultCallTimeout)
 	defer cancel()
 	if err := s.gate.Check(ctx, p.Name, t.Risk, argText); err != nil {
-		s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " denied: " + err.Error())})
+		s.record(auditID, timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " denied: " + err.Error())})
 		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": err.Error()})
 		return
 	}
 	out, err := t.Invoke(ctx, p.Args, kit.DefaultCallTimeout)
 	if err != nil {
-		s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " error: " + kit.Truncate(err.Error(), 2000))})
+		s.record(auditID, timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " error: " + kit.Truncate(err.Error(), 2000))})
 		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": err.Error()})
 		return
 	}
-	s.record("", timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " ok: " + kit.Truncate(out, 2000))})
+	s.record(auditID, timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " ok: " + kit.Truncate(out, 2000))})
 	s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": true, "output": out})
 }
 

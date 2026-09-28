@@ -32,7 +32,7 @@ Capabilities are provided as **Kits**; the host aggregates the tools each Kit
 contributes, and **the built-in agent, the UI protocol and the future MCP server
 share one single definition**:
 
-- Built-in Kits: `Host`, `Network`, `Serial`, `SSH`, `SFTP`, `Workspace`, `CodeEdit`, `Timeline` — 24 tools in total
+- Built-in Kits: `Host`, `Network`, `Serial`, `SSH`, `SFTP`, `Workspace`, `CodeEdit`, `Timeline`, `Sessions` — 25 tools in total
 - Each Kit carries a `Manifest` (`id` / `name` / `version` / `license` / `runtime` / `activation`)
   and a set of `Tool`s (JSON Schema + risk level `read` / `mutate` / `dangerous`)
 - **`activation` is enforced**: a Kit declaring `onDeviceKind:serial` /
@@ -150,7 +150,7 @@ flow still applies.
 
 # 2) add it to OpenClaw (add probes the connection first and only saves on success)
 openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
-openclaw mcp probe edgekit        # -> edgekit: 24 tools
+openclaw mcp probe edgekit        # -> edgekit: 25 tools
 ```
 
 - Protocol: MCP (JSON-RPC 2.0 over stdio), implementing `initialize` /
@@ -241,13 +241,18 @@ upgrade tasks; it is EdgeKit's core entry point.
   `sftp_upload`, `workspace_list` / `workspace_read` / `workspace_write`,
   `code_patch` / `code_diff` / `code_deploy` / `code_run` / `code_revert`
   (closed-loop debugging: patch → review diff → deploy → run → revert),
-  and `wait_for_output` (block until a matching device output, see
-  "Device model and timeline").
+  `wait_for_output` (block until a matching device output) and
+  `sessions_list` (the device-session directory, see "Multi-board addressing").
 - **Approval**: read-only tools run automatically; **mutating operations** such as
   writing to serial, running commands or uploading files **prompt first**, and only
   run after "Allow" (tick "Auto-run mutating operations" to skip the prompt).
 - **Context aware**: the agent knows whether serial / SSH is connected and the
   target, reuses established sessions, and downloads land in the local workspace.
+- **Multi-board addressing**: `sessions_list` lists every device session
+  (id / kind / state / label); device tools accept a `session` argument to target
+  a specific board (`ssh_exec`, `serial_write`, `sftp_*`, `wait_for_output`, …)
+  and default to the focused session. The system prompt lists the session ids,
+  and an unknown id returns the available ones — no accidental cross-board writes.
 - **Shortcuts**: device inspection / system logs / disk / memory / system version.
 - Transcript, tool calls and results are kept in the panel as chat cards.
 

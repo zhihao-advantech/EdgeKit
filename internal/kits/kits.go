@@ -23,6 +23,7 @@ func Builtin(deps kit.Deps) []kit.Kit {
 		workspaceKit{},
 		codeEditKit{deps.SFTP, deps.SSH},
 		timelineKit{deps.Timeline},
+		sessionsKit{deps.Sessions},
 	}
 }
 
@@ -42,6 +43,20 @@ func obj(props map[string]any, required ...string) map[string]any {
 
 func strType() map[string]any { return map[string]any{"type": "string"} }
 func intType() map[string]any { return map[string]any{"type": "integer"} }
+
+// deviceObj builds an object schema for a device tool and adds the shared
+// `session` argument, which routes the call to a specific device session
+// instead of the focused one.
+func deviceObj(props map[string]any, required ...string) map[string]any {
+	if props == nil {
+		props = map[string]any{}
+	}
+	props["session"] = map[string]any{
+		"type":        "string",
+		"description": "目标设备会话 id（可选，默认当前聚焦会话；可用 sessions_list 查看）",
+	}
+	return obj(props, required...)
+}
 
 /* ---- argument helpers ---- */
 

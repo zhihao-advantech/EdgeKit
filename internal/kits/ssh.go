@@ -40,12 +40,12 @@ func (k sshKit) Tools() []kit.Tool {
 			Name:        "ssh_exec",
 			Description: "在 Remote（远端设备）上通过 SSH 执行一条 shell 命令并返回输出",
 			Risk:        kit.RiskMutate,
-			Schema:      obj(map[string]any{"command": strType()}, "command"),
+			Schema:      deviceObj(map[string]any{"command": strType()}, "command"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsConnected() {
 					return "", fmt.Errorf("SSH 未连接")
 				}
-				return k.s.ExecCapture(argString(args, "command"), 64*1024)
+				return k.s.ExecCapture(ctx, argString(args, "command"), 64*1024)
 			},
 		},
 	}

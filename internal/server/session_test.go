@@ -14,9 +14,18 @@ func newTestServer() *Server {
 	s := &Server{
 		sessions: make(map[string]*deviceSession),
 		clients:  make(map[*client]struct{}),
-		kits:     kit.NewRegistry(),
 	}
-	for _, k := range kits.Builtin(kit.Deps{}) {
+	// Mirror New(): the built-in kits are wired to the server's session
+	// proxies, so tools resolve the focused (or named) device.
+	s.deps = kit.Deps{
+		Serial:   focusedSerial{s},
+		SSH:      focusedSSH{s},
+		SFTP:     focusedSFTP{s},
+		Timeline: focusedTimeline{s},
+		Sessions: s.sessionsDirectory,
+	}
+	s.kits = kit.NewRegistry()
+	for _, k := range kits.Builtin(s.deps) {
 		s.kits.Register(k)
 	}
 	return s

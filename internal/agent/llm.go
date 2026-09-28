@@ -166,7 +166,9 @@ func (m *Manager) systemPrompt() string {
 	b.WriteString("回答使用简体中文，先给结论再给必要细节，命令输出可适当摘要。\n\n")
 	fmt.Fprintf(&b, "用户当前选择的执行目标：%s。\n", targetLabel(m.Target()))
 	b.WriteString("Remote 用 ssh_exec / serial_exec，Local 用 local_exec；\n")
-	b.WriteString("若用户明确说「本机 / local」或「远端 / 设备 / remote」，以用户所说为准。\n\n当前环境：\n")
+	b.WriteString("若用户明确说「本机 / local」或「远端 / 设备 / remote」，以用户所说为准。\n")
+	b.WriteString("设备工具可选传 session 参数指定目标会话（多板同时连接时用它区分）；\n")
+	b.WriteString("不带 session 时作用于当前聚焦会话。\n\n当前环境：\n")
 	if m.deps.Serial != nil && m.deps.Serial.IsOpen() {
 		fmt.Fprintf(&b, "- 串口已打开: %s\n", m.deps.Serial.Port())
 	} else {
@@ -181,6 +183,18 @@ func (m *Manager) systemPrompt() string {
 		b.WriteString("- SFTP 已连接（可直接下载远端文件到工作区）\n")
 	} else {
 		b.WriteString("- SFTP 未就绪\n")
+	}
+	if m.deps.Sessions != nil {
+		if list := m.deps.Sessions(); len(list) > 0 {
+			b.WriteString("设备会话（session 参数可用这些 id）：\n")
+			for _, si := range list {
+				state := "未连接"
+				if si.Connected {
+					state = "已连接"
+				}
+				fmt.Fprintf(&b, "- %s [%s] %s %s\n", si.ID, si.Kind, state, si.Label)
+			}
+		}
 	}
 	if root := workspaceRoot(); root != "" {
 		fmt.Fprintf(&b, "- 本地工作区: %s\n", root)

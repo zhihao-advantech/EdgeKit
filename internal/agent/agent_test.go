@@ -23,11 +23,14 @@ type stubSerial struct {
 	recent  []byte
 }
 
-func (s *stubSerial) IsOpen() bool         { return s.open }
-func (s *stubSerial) Port() string         { return "/dev/stub" }
-func (s *stubSerial) Write(p []byte) error { s.written = append(s.written, p...); return nil }
-func (s *stubSerial) Recent() []byte       { return s.recent }
-func (s *stubSerial) RunCapture(command string, quiet, timeout time.Duration) (string, error) {
+func (s *stubSerial) IsOpen() bool { return s.open }
+func (s *stubSerial) Port() string { return "/dev/stub" }
+func (s *stubSerial) Write(_ context.Context, p []byte) error {
+	s.written = append(s.written, p...)
+	return nil
+}
+func (s *stubSerial) Recent(context.Context) []byte { return s.recent }
+func (s *stubSerial) RunCapture(_ context.Context, command string, quiet, timeout time.Duration) (string, error) {
 	return "stub output for " + command, nil
 }
 
@@ -36,15 +39,15 @@ type stubTimeline struct {
 	records []timeline.Record
 }
 
-func (s *stubTimeline) Append(r timeline.Record) timeline.Record {
+func (s *stubTimeline) Append(_ context.Context, r timeline.Record) timeline.Record {
 	s.records = append(s.records, r)
 	return r
 }
 func (s *stubTimeline) Wait(ctx context.Context, f timeline.Filter, timeout time.Duration) (timeline.Record, error) {
 	return timeline.Record{}, timeline.ErrTimeout
 }
-func (s *stubTimeline) Since(after uint64, limit int) []timeline.Record { return nil }
-func (s *stubTimeline) LastSeq() uint64                                 { return uint64(len(s.records)) }
+func (s *stubTimeline) Since(context.Context, uint64, int) []timeline.Record { return nil }
+func (s *stubTimeline) LastSeq(context.Context) uint64                       { return uint64(len(s.records)) }
 
 type stubSSH struct {
 	out string
@@ -52,7 +55,7 @@ type stubSSH struct {
 
 func (s *stubSSH) IsConnected() bool { return true }
 func (s *stubSSH) Target() string    { return "user@127.0.0.1:22" }
-func (s *stubSSH) ExecCapture(command string, maxBytes int) (string, error) {
+func (s *stubSSH) ExecCapture(_ context.Context, command string, maxBytes int) (string, error) {
 	return s.out, nil
 }
 
@@ -330,6 +333,35 @@ func TestAgentToolSurfaceFollowsDeviceKind(t *testing.T) {
 	}
 	if names["ssh_exec"] {
 		t.Fatal("ssh kit must stay hidden without an ssh session")
+	}
+}
+
+func TestAgentSessionDirectory(t *testing.T) {
+	deps := Deps{Sessions: func() []kit.SessionInfo {
+		return []kit.SessionInfo{
+			{ID: "serial-1", Kind: "serial", Label: "/dev/ttyUSB0", Connected: true},
+			{ID: "ssh-2", Kind: "ssh", Label: "user@192.0.2.10:22", Connected: true},
+		}
+	}}
+	ag := newTestManager(deps, testGate(true), func(Event) {})
+
+	// The system prompt lists the open sessions so the model can address them.
+	prompt := ag.systemPrompt()
+	for _, want := range []string{"serial-1", "ssh-2", "session 参数"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	// sessions_list exposes the same directory as a tool.
+	out, err := ag.runTool(context.Background(), "sessions_list", nil, true)
+	if err != nil {
+		t.Fatalf("sessions_list: %v", err)
+	}
+	for _, want := range []string{"serial-1", "ssh-2", "已连接"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("sessions_list missing %q: %q", want, out)
+		}
 	}
 }
 

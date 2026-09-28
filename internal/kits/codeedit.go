@@ -94,7 +94,7 @@ func (k codeEditKit) Tools() []kit.Tool {
 			Name:        "code_deploy",
 			Description: "推送本地工作区文件到板端（SFTP）",
 			Risk:        kit.RiskMutate,
-			Schema: obj(map[string]any{
+			Schema: deviceObj(map[string]any{
 				"path":   strType(),
 				"target": strType(),
 			}, "path", "target"),
@@ -111,7 +111,7 @@ func (k codeEditKit) Tools() []kit.Tool {
 				if err != nil {
 					return "", err
 				}
-				if err := k.sftp.Upload(target, data); err != nil {
+				if err := k.sftp.Upload(ctx, target, data); err != nil {
 					return "", err
 				}
 				return fmt.Sprintf("已部署 %s → %s（%d 字节）", path, target, len(data)), nil
@@ -121,7 +121,7 @@ func (k codeEditKit) Tools() []kit.Tool {
 			Name:        "code_run",
 			Description: "在板端运行命令并返回结构化结果（exit code + output + timing）",
 			Risk:        kit.RiskMutate,
-			Schema: obj(map[string]any{
+			Schema: deviceObj(map[string]any{
 				"command": strType(),
 			}, "command"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
@@ -133,7 +133,7 @@ func (k codeEditKit) Tools() []kit.Tool {
 					return "", fmt.Errorf("SSH 未连接")
 				}
 				start := time.Now()
-				out, err := k.ssh.ExecCapture(command, 64*1024)
+				out, err := k.ssh.ExecCapture(ctx, command, 64*1024)
 				duration := time.Since(start)
 				if err != nil {
 					return "", err
