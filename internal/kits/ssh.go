@@ -17,7 +17,7 @@ func (sshKit) Manifest() kit.Manifest {
 		Version:     "0.1.0",
 		License:     "Apache-2.0",
 		Runtime:     "builtin",
-		Activation:  []string{"onStartup", "onDeviceKind:ssh"},
+		Activation:  []string{kit.DeviceKindEvent("ssh")},
 		Description: "SSH 连接状态查询与远端命令执行",
 	}
 }

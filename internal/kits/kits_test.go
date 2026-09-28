@@ -14,13 +14,71 @@ func buildRegistry() *kit.Registry {
 	return reg
 }
 
+// activateDevices fires the device-kind events as if a serial board and an
+// SSH host were connected, exposing every built-in kit.
+func activateDevices(reg *kit.Registry) {
+	reg.SetEvent(kit.DeviceKindEvent("serial"), true)
+	reg.SetEvent(kit.DeviceKindEvent("ssh"), true)
+}
+
 func TestBuiltinKitsContributeTools(t *testing.T) {
 	reg := buildRegistry()
+	activateDevices(reg)
 	if got := len(reg.Tools()); got != 24 {
 		t.Fatalf("expected 24 tools from the built-in kits, got %d", got)
 	}
 	if got := len(reg.Manifests()); got != 8 {
 		t.Fatalf("expected 8 kits, got %d", got)
+	}
+}
+
+func TestDeviceKindActivation(t *testing.T) {
+	reg := buildRegistry()
+	// No device session: only the always-on kits are exposed.
+	const (
+		alwaysOn = 13 // host 2 + net 3 + workspace 3 + codeedit 5
+		serial   = 4
+		ssh      = 2
+		sftp     = 4
+		timeline = 1
+	)
+	if got := len(reg.Tools()); got != alwaysOn {
+		t.Fatalf("without devices expected %d tools, got %d", alwaysOn, got)
+	}
+	if _, ok := reg.Tool("serial_read"); ok {
+		t.Fatal("serial tools must be hidden until a serial session exists")
+	}
+	if _, ok := reg.Tool("wait_for_output"); ok {
+		t.Fatal("timeline tools must be hidden until a device session exists")
+	}
+
+	reg.SetEvent(kit.DeviceKindEvent("serial"), true)
+	if got := len(reg.Tools()); got != alwaysOn+serial+timeline {
+		t.Fatalf("with serial expected %d tools, got %d", alwaysOn+serial+timeline, got)
+	}
+	if _, ok := reg.Tool("serial_read"); !ok {
+		t.Fatal("serial tools must appear once a serial session exists")
+	}
+	if _, ok := reg.Tool("ssh_exec"); ok {
+		t.Fatal("ssh tools must stay hidden without an ssh session")
+	}
+
+	reg.SetEvent(kit.DeviceKindEvent("ssh"), true)
+	if got := len(reg.Tools()); got != alwaysOn+serial+ssh+sftp+timeline {
+		t.Fatalf("with serial+ssh expected all tools, got %d", got)
+	}
+
+	// The last session going away hides the kit again.
+	reg.SetEvent(kit.DeviceKindEvent("serial"), false)
+	if _, ok := reg.Tool("serial_read"); ok {
+		t.Fatal("serial tools must hide when the session goes away")
+	}
+	if _, ok := reg.Tool("ssh_exec"); !ok {
+		t.Fatal("ssh tools must stay exposed")
+	}
+	// The manifest is still listed so the UI can show the kit.
+	if got := len(reg.Manifests()); got != 8 {
+		t.Fatalf("manifests must stay listed, got %d", got)
 	}
 }
 
@@ -44,6 +102,7 @@ func TestManifestsAreWellFormed(t *testing.T) {
 
 func TestToolRiskClassification(t *testing.T) {
 	reg := buildRegistry()
+	activateDevices(reg)
 	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "sftp_download", "workspace_write", "code_patch", "code_deploy", "code_run", "code_revert"}
 	for _, name := range mutating {
 		tool, ok := reg.Tool(name)
@@ -82,6 +141,7 @@ func TestRegistryIgnoresDuplicateToolNames(t *testing.T) {
 
 func TestKitActivation(t *testing.T) {
 	reg := buildRegistry()
+	activateDevices(reg)
 	const all = 24
 	if got := len(reg.Tools()); got != all {
 		t.Fatalf("all kits enabled should expose %d tools, got %d", all, got)

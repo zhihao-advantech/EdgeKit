@@ -23,7 +23,7 @@ func (timelineKit) Manifest() kit.Manifest {
 		Version:     "0.1.0",
 		License:     "Apache-2.0",
 		Runtime:     "builtin",
-		Activation:  []string{"onStartup", "onDeviceKind:serial", "onDeviceKind:ssh"},
+		Activation:  []string{kit.DeviceKindEvent("serial"), kit.DeviceKindEvent("ssh")},
 		Description: "等待设备时间线出现匹配的输出（串口接收 / SSH stdout 等）",
 	}
 }

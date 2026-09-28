@@ -119,8 +119,9 @@ WebSocket API：与界面走同一套协议，适合 Agent 直接调用（见第
 ## 6. 内置 Agent 工具清单
 
 工具由内置 Kit 提供（Host / Network / Serial / SSH / SFTP / Workspace / CodeEdit / Timeline），
-可在「工具 → Kits 管理」中启用/禁用；禁用的 Kit 不暴露工具。Agent 在它们之上做
-function-calling（只读工具自动执行，**修改性工具默认需用户确认**）：
+可在「工具 → Kits 管理」中启用/禁用；禁用的 Kit 不暴露工具。**依赖设备的 Kit（Serial / SSH /
+SFTP / Timeline）在未连接对应设备会话时同样隐藏**，连接后自动出现——因此调用前先确认设备已连接，
+否则会得到「未知工具」。Agent 在它们之上做 function-calling（只读工具自动执行，**修改性工具默认需用户确认**）：
 
 | 工具 | 作用 | 修改性 |
 | --- | --- | --- |

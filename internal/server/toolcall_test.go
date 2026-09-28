@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"edgekit/internal/kit"
-	"edgekit/internal/kits"
 	"edgekit/internal/policy"
 	"edgekit/internal/serial"
 	"edgekit/internal/timeline"
@@ -54,12 +53,11 @@ func callTool(t *testing.T, s *Server, id, name string, args map[string]any) too
 
 func newToolCallServer() *Server {
 	s := newTestServer()
-	s.kits = kit.NewRegistry()
-	for _, k := range kits.Builtin(kit.Deps{}) {
-		s.kits.Register(k)
-	}
 	s.gate = policy.New(nil)
 	s.gate.SetAutoRun(true)
+	// Simulate a connected board so the device-dependent kits are exposed,
+	// exactly as the host does when a session appears.
+	s.kits.SetEvent(kit.DeviceKindEvent("serial"), true)
 	return s
 }
 

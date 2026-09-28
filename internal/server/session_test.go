@@ -3,16 +3,23 @@ package server
 import (
 	"testing"
 
+	"edgekit/internal/kit"
+	"edgekit/internal/kits"
 	"edgekit/internal/serial"
 	"edgekit/internal/sftpx"
 	"edgekit/internal/sshclient"
 )
 
 func newTestServer() *Server {
-	return &Server{
+	s := &Server{
 		sessions: make(map[string]*deviceSession),
 		clients:  make(map[*client]struct{}),
+		kits:     kit.NewRegistry(),
 	}
+	for _, k := range kits.Builtin(kit.Deps{}) {
+		s.kits.Register(k)
+	}
+	return s
 }
 
 func TestSessionRegistry(t *testing.T) {
@@ -52,5 +59,27 @@ func TestSessionRegistry(t *testing.T) {
 	}
 	if s.session("missing") != nil {
 		t.Fatal("unknown id should resolve to nothing")
+	}
+}
+
+// TestDeviceEventsFollowSessions checks that device-dependent kits are exposed
+// exactly while a session of their kind exists.
+func TestDeviceEventsFollowSessions(t *testing.T) {
+	s := newTestServer()
+	if _, ok := s.kits.Tool("serial_read"); ok {
+		t.Fatal("serial tools must be hidden before any session")
+	}
+
+	s.registerSession(&deviceSession{id: "serial-1", kind: "serial", label: "ttyUSB0", serial: serial.New(nil)})
+	if _, ok := s.kits.Tool("serial_read"); !ok {
+		t.Fatal("serial tools must appear once a serial session exists")
+	}
+	if _, ok := s.kits.Tool("ssh_exec"); ok {
+		t.Fatal("ssh tools must stay hidden")
+	}
+
+	s.closeSession("serial-1")
+	if _, ok := s.kits.Tool("serial_read"); ok {
+		t.Fatal("serial tools must hide once the last serial session is gone")
 	}
 }

@@ -1848,13 +1848,16 @@
   function kitsSection() {
     const kits = state.kits.kits || [];
     if (!kits.length) return "";
-    const total = kits.reduce((n, k) => n + (k.tools ? k.tools.length : 0), 0);
-    const mutating = kits.reduce((n, k) => n + (k.tools || []).filter((t) => t.risk !== "read").length, 0);
-    const enabled = kits.filter((k) => k.enabled).length;
+    const active = kits.filter((k) => k.active);
+    const total = active.reduce((n, k) => n + (k.tools ? k.tools.length : 0), 0);
+    const mutating = active.reduce((n, k) => n + (k.tools || []).filter((t) => t.risk !== "read").length, 0);
     const items = kits
-      .map((k) => `<li><b>${esc(k.name)}</b> <span class="muted">v${esc(k.version)}${k.license ? " · " + esc(k.license) : ""}${k.enabled ? "" : " · 已禁用"} — ${esc(k.description || "")}</span></li>`)
+      .map((k) => {
+        const note = !k.enabled ? " · 已禁用" : (k.active ? "" : " · 待连接设备");
+        return `<li><b>${esc(k.name)}</b> <span class="muted">v${esc(k.version)}${k.license ? " · " + esc(k.license) : ""}${note} — ${esc(k.description || "")}</span></li>`;
+      })
       .join("");
-    return `<p class="muted">已加载 ${kits.length} 个 Kit（启用 ${enabled}），共 ${total} 个工具（${total - mutating} 只读 / ${mutating} 修改）：</p><ul>${items}</ul>`;
+    return `<p class="muted">已加载 ${kits.length} 个 Kit（生效 ${active.length}），共 ${total} 个工具（${total - mutating} 只读 / ${mutating} 修改）：</p><ul>${items}</ul>`;
   }
 
   // Kit id -> display name, for tool attribution.
@@ -1865,9 +1868,9 @@
 
   function updateKitsSummary() {
     const kits = state.kits.kits || [];
-    const enabled = kits.filter((k) => k.enabled);
-    const tools = enabled.reduce((n, k) => n + (k.tools ? k.tools.length : 0), 0);
-    $("m-kits").textContent = `${enabled.length}/${kits.length} 个 Kit 启用 · ${tools} 个工具可用`;
+    const active = kits.filter((k) => k.active);
+    const tools = active.reduce((n, k) => n + (k.tools ? k.tools.length : 0), 0);
+    $("m-kits").textContent = `${active.length}/${kits.length} 个 Kit 生效 · ${tools} 个工具可用`;
   }
 
   // ---- Kits management dialog (enable / disable capability packs) ----
@@ -1884,17 +1887,18 @@
       const chips = (k.tools || [])
         .map((t) => `<span class="kchip ${esc(t.risk)}" title="${esc(t.description || "")}">${esc(t.name)}</span>`)
         .join("");
+      const state = !k.enabled ? " · 已禁用" : (k.active ? "" : " · 待连接设备");
       return `<div class="kit-row">
         <label class="kit-head">
           <input type="checkbox" data-kit="${esc(k.id)}" ${k.enabled ? "checked" : ""}>
           <b>${esc(k.name)}</b>
-          <span class="muted">v${esc(k.version)}${k.license ? " · " + esc(k.license) : ""} · ${(k.tools || []).length} 工具</span>
+          <span class="muted">v${esc(k.version)}${k.license ? " · " + esc(k.license) : ""} · ${(k.tools || []).length} 工具${state}</span>
         </label>
         <div class="kinfo muted">${esc(k.description || "")}${k.activation && k.activation.length ? " · 激活: " + esc(k.activation.join(", ")) : ""}</div>
         <div class="ktools">${chips}</div>
       </div>`;
     }).join("");
-    return `<p class="muted">启用 / 禁用能力包；禁用的 Kit 不会向 Agent 与 MCP 暴露工具。</p><div class="kit-list">${rows}</div>`;
+    return `<p class="muted">启用 / 禁用能力包；禁用的 Kit 不会向 Agent 与 MCP 暴露工具。依赖设备的 Kit 在未连接对应设备时同样不会暴露工具。</p><div class="kit-list">${rows}</div>`;
   }
   function wireKitsModal() {
     document.querySelectorAll("#modal-body input[data-kit]").forEach((cb) => {

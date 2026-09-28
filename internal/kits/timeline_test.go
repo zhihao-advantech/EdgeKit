@@ -20,11 +20,19 @@ func tool(t *testing.T, reg *kit.Registry, name string) kit.Tool {
 	return tl
 }
 
+// timelineRegistry registers the timeline kit with its device-kind activation
+// satisfied, as the host does once a device session exists.
+func timelineRegistry(tl kit.Timeline) *kit.Registry {
+	reg := kit.NewRegistry()
+	reg.Register(timelineKit{tl})
+	reg.SetEvent(kit.DeviceKindEvent("serial"), true)
+	return reg
+}
+
 func TestWaitForOutputMatchesRecentRecord(t *testing.T) {
 	tl := timeline.New(100)
 	tl.Append(timeline.Record{Channel: timeline.ChannelSerial, Kind: "rx", Data: []byte("U-Boot 2023.10")})
-	reg := kit.NewRegistry()
-	reg.Register(timelineKit{tl})
+	reg := timelineRegistry(tl)
 
 	w := tool(t, reg, "wait_for_output")
 	out, err := w.Call(context.Background(), map[string]any{"pattern": "U-Boot", "channel": "serial"})
@@ -38,8 +46,7 @@ func TestWaitForOutputMatchesRecentRecord(t *testing.T) {
 
 func TestWaitForOutputWaitsForFutureRecord(t *testing.T) {
 	tl := timeline.New(100)
-	reg := kit.NewRegistry()
-	reg.Register(timelineKit{tl})
+	reg := timelineRegistry(tl)
 	w := tool(t, reg, "wait_for_output")
 
 	go func() {
@@ -58,8 +65,7 @@ func TestWaitForOutputWaitsForFutureRecord(t *testing.T) {
 func TestWaitForOutputTimeoutTailsRecords(t *testing.T) {
 	tl := timeline.New(100)
 	tl.Append(timeline.Record{Channel: timeline.ChannelSerial, Kind: "rx", Data: []byte("kernel panic - not syncing")})
-	reg := kit.NewRegistry()
-	reg.Register(timelineKit{tl})
+	reg := timelineRegistry(tl)
 	w := tool(t, reg, "wait_for_output")
 
 	out, err := w.Call(context.Background(), map[string]any{"pattern": "no such line", "timeout_ms": 20})
@@ -73,8 +79,7 @@ func TestWaitForOutputTimeoutTailsRecords(t *testing.T) {
 
 func TestWaitForOutputValidatesArguments(t *testing.T) {
 	tl := timeline.New(10)
-	reg := kit.NewRegistry()
-	reg.Register(timelineKit{tl})
+	reg := timelineRegistry(tl)
 	w := tool(t, reg, "wait_for_output")
 	ctx := context.Background()
 
@@ -90,8 +95,7 @@ func TestWaitForOutputValidatesArguments(t *testing.T) {
 }
 
 func TestWaitForOutputWithoutDeviceSession(t *testing.T) {
-	reg := kit.NewRegistry()
-	reg.Register(timelineKit{nil}) // no focused device
+	reg := timelineRegistry(nil) // activation satisfied, but no focused device
 	w := tool(t, reg, "wait_for_output")
 	if _, err := w.Call(context.Background(), map[string]any{"pattern": "x"}); err == nil {
 		t.Fatal("no device session should fail")

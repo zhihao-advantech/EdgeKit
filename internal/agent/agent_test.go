@@ -120,12 +120,16 @@ func mockLLM(t *testing.T, responses []string, requests *[]chatRequest) *httptes
 	return srv
 }
 
-// newTestManager builds an agent backed by the built-in kits.
+// newTestManager builds an agent backed by the built-in kits. Like the host,
+// it fires the device-kind activation events from the current capabilities,
+// so device-dependent kits are exposed only while a device is present.
 func newTestManager(deps Deps, gate *policy.Gate, on func(Event)) *Manager {
 	reg := kit.NewRegistry()
 	for _, k := range kits.Builtin(deps) {
 		reg.Register(k)
 	}
+	reg.SetEvent(kit.DeviceKindEvent("serial"), deps.Serial != nil && deps.Serial.IsOpen())
+	reg.SetEvent(kit.DeviceKindEvent("ssh"), deps.SSH != nil && deps.SSH.IsConnected())
 	return New(reg, deps, gate, on)
 }
 
@@ -294,6 +298,38 @@ func TestAgentToolCallsAuditedToTimeline(t *testing.T) {
 	}
 	if !action || !result {
 		t.Fatalf("expected action + result audit records, got %+v", tl.records)
+	}
+}
+
+func TestAgentToolSurfaceFollowsDeviceKind(t *testing.T) {
+	toolNames := func(m *Manager) map[string]bool {
+		out := map[string]bool{}
+		for _, ts := range m.toolSchemas() {
+			out[ts.Function.Name] = true
+		}
+		return out
+	}
+
+	// No device: always-on kits only.
+	names := toolNames(newTestManager(Deps{}, testGate(true), func(Event) {}))
+	for _, present := range []string{"local_info", "net_ping", "workspace_list", "code_diff"} {
+		if !names[present] {
+			t.Fatalf("always-on tool %s missing", present)
+		}
+	}
+	for _, hidden := range []string{"serial_read", "ssh_exec", "sftp_list", "wait_for_output"} {
+		if names[hidden] {
+			t.Fatalf("device tool %s should be hidden without a device", hidden)
+		}
+	}
+
+	// A serial board appears: the serial kit and the timeline kit show up.
+	names = toolNames(newTestManager(Deps{Serial: &stubSerial{open: true}}, testGate(true), func(Event) {}))
+	if !names["serial_read"] || !names["wait_for_output"] {
+		t.Fatal("serial kit should be exposed once a serial board is connected")
+	}
+	if names["ssh_exec"] {
+		t.Fatal("ssh kit must stay hidden without an ssh session")
 	}
 }
 

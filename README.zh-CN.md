@@ -31,6 +31,9 @@ AI Agent、串口调试、SSH 终端、工作区文件管理，支持**同时连
 - 内置 Kit：`Host`、`Network`、`Serial`、`SSH`、`SFTP`、`Workspace`、`CodeEdit`、`Timeline`，共 24 个工具
 - 每个 Kit 带 `Manifest`（`id` / `name` / `version` / `license` / `runtime` / `activation`）
   与一组 `Tool`（JSON Schema + 风险等级 `read` / `mutate` / `dangerous`）
+- **`activation` 已生效**：声明 `onDeviceKind:serial` / `onDeviceKind:ssh` 的 Kit 在
+  没有对应设备会话时不向 Agent 与 MCP 暴露工具（连接后自动出现，最后一块断开后再次隐藏）；
+  Serial / SSH / SFTP / Timeline 由此按需出现，「Kits 管理」面板将其标为「待连接设备」
 - 宿主在执行前**统一按 JSON Schema 校验参数**（必填项 / 类型），两个调用入口
   （内置 Agent、MCP 桥）共用同一道校验——这是后续接入外置 Kit 的安全前置
 - 宿主对非 `read` 工具要求审批（沿用现有 approval 流程），**校验发生在审批之前**
@@ -48,7 +51,7 @@ internal/kits/   内置 Kit 实现，Builtin(deps) 返回全部
 internal/agent/  只消费 kit.Registry，不再硬编码工具
 ```
 
-后续阶段：`kit.json` 外置清单、外置 Kit（协议走 MCP）、Kits 管理页。
+后续阶段：`kit.json` 外置清单、外置 Kit（协议走 MCP）。
 
 ## Agent + Kit
 
@@ -61,7 +64,10 @@ TRAE 的自定义 Agent 工具开关、WorkBuddy 的 Connectors 同构：
   或外置（MCP → OpenClaw）
 - **启用/禁用**：「工具 → Kits 管理…」或 Agent 面板的「Kits 管理…」
   - 禁用的 Kit **不向 Agent 与 MCP 暴露工具，也无法执行**（调用返回「未知工具」）
-  - 面板展示每个 Kit 的版本、许可证、激活事件、以及工具与风险等级
+  - 依赖设备的 Kit（Serial / SSH / SFTP / Timeline）在**未连接对应设备时同样隐藏**，
+    连接对应设备会话后自动出现
+  - 面板展示每个 Kit 的版本、许可证、激活事件、以及工具与风险等级，
+    并标注「已禁用 / 待连接设备」状态
   - 选择持久化到 `~/.config/edgekit/settings.json` 的 `kits.disabled`
 - **归属可见**：对话中的工具卡片标明来自哪个 Kit（如 `Serial · serial_read`）
 

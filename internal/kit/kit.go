@@ -119,6 +119,21 @@ type Kit interface {
 	Tools() []Tool
 }
 
+// Activation events a manifest can declare. A kit is exposed while any one of
+// its activation events is satisfied, and hidden (like a disabled kit) while
+// none is.
+const (
+	// EventStartup is satisfied from process start.
+	EventStartup = "onStartup"
+	// eventDeviceKindPrefix builds "a session of this device kind exists".
+	eventDeviceKindPrefix = "onDeviceKind:"
+)
+
+// DeviceKindEvent returns the activation event meaning "a session of this
+// device kind exists" (e.g. "serial", "ssh"). The host fires it when the
+// first session of the kind appears and when the last one goes away.
+func DeviceKindEvent(kind string) string { return eventDeviceKindPrefix + kind }
+
 /* ------------------------------------------------------------------ *
  * capabilities the built-in kits operate on
  *
@@ -188,17 +203,26 @@ type toolEntry struct {
 //
 // A kit can be enabled or disabled (like an editor extension): a disabled kit's
 // tools are neither advertised to a brain nor executable, but its manifest is
-// still listed so the UI can offer to turn it back on.
+// still listed so the UI can offer to turn it back on. On top of that, a kit's
+// activation events decide whether it is currently exposed: the host fires the
+// events (e.g. onDeviceKind:serial while a serial session exists), so a kit
+// whose capabilities no session backs is hidden from the agent and MCP until
+// one appears — keeping the advertised tool surface small and relevant.
 type Registry struct {
-	mu    sync.Mutex
-	kits  []*entry
-	tools map[string]toolEntry
-	order []string
+	mu     sync.Mutex
+	kits   []*entry
+	tools  map[string]toolEntry
+	order  []string
+	events map[string]bool
 }
 
-// NewRegistry returns an empty registry.
+// NewRegistry returns an empty registry. onStartup is satisfied from the
+// beginning; every other event starts unsatisfied until the host fires it.
 func NewRegistry() *Registry {
-	return &Registry{tools: make(map[string]toolEntry)}
+	return &Registry{
+		tools:  make(map[string]toolEntry),
+		events: map[string]bool{EventStartup: true},
+	}
 }
 
 // Register adds a kit's contributions (enabled by default). A tool name already
@@ -231,7 +255,8 @@ func (r *Registry) SetEnabled(id string, on bool) bool {
 	return false
 }
 
-// IsEnabled reports whether a kit is activated.
+// IsEnabled reports whether a kit is activated by the user (regardless of its
+// activation events).
 func (r *Registry) IsEnabled(id string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -241,6 +266,14 @@ func (r *Registry) IsEnabled(id string) bool {
 		}
 	}
 	return false
+}
+
+// IsActive reports whether a kit currently exposes its tools: enabled by the
+// user and with at least one activation event satisfied.
+func (r *Registry) IsActive(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.availableLocked(id)
 }
 
 // ToolKit returns the id of the kit that contributed a tool.
@@ -258,12 +291,13 @@ func (r *Registry) Tools() []Tool {
 	return r.toolsLocked()
 }
 
-// Tool looks up an enabled tool by name.
+// Tool looks up an enabled tool by name. A kit that is disabled or whose
+// activation is currently unsatisfied is as good as absent.
 func (r *Registry) Tool(name string) (Tool, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	te, ok := r.tools[name]
-	if !ok || !r.enabledLocked(te.kitID) {
+	if !ok || !r.availableLocked(te.kitID) {
 		return Tool{}, false
 	}
 	return te.tool, true
@@ -294,21 +328,58 @@ func (r *Registry) Manifests() []Manifest {
 	return out
 }
 
+// SetEvent marks an activation event as satisfied (true) or not (false). The
+// host fires device-kind events as sessions appear and go away; startup is
+// satisfied from creation.
+func (r *Registry) SetEvent(event string, active bool) {
+	r.mu.Lock()
+	r.events[event] = active
+	r.mu.Unlock()
+}
+
+// Events returns the currently satisfied activation events (e.g. for the
+// About panel).
+func (r *Registry) Events() map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]bool, len(r.events))
+	for ev, active := range r.events {
+		if active {
+			out[ev] = true
+		}
+	}
+	return out
+}
+
 func (r *Registry) toolsLocked() []Tool {
 	out := make([]Tool, 0, len(r.order))
 	for _, name := range r.order {
 		te := r.tools[name]
-		if r.enabledLocked(te.kitID) {
+		if r.availableLocked(te.kitID) {
 			out = append(out, te.tool)
 		}
 	}
 	return out
 }
 
-func (r *Registry) enabledLocked(id string) bool {
+// availableLocked reports whether a kit currently exposes its tools: enabled
+// by the user and with at least one activation event satisfied.
+func (r *Registry) availableLocked(id string) bool {
 	for _, e := range r.kits {
 		if e.kit.Manifest().ID == id {
-			return e.enabled
+			if !e.enabled {
+				return false
+			}
+			m := e.kit.Manifest()
+			if len(m.Activation) == 0 {
+				return true
+			}
+			for _, ev := range m.Activation {
+				if r.events[ev] {
+					return true
+				}
+			}
+			return false
 		}
 	}
 	return false

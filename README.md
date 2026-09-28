@@ -35,6 +35,10 @@ share one single definition**:
 - Built-in Kits: `Host`, `Network`, `Serial`, `SSH`, `SFTP`, `Workspace`, `CodeEdit`, `Timeline` — 24 tools in total
 - Each Kit carries a `Manifest` (`id` / `name` / `version` / `license` / `runtime` / `activation`)
   and a set of `Tool`s (JSON Schema + risk level `read` / `mutate` / `dangerous`)
+- **`activation` is enforced**: a Kit declaring `onDeviceKind:serial` /
+  `onDeviceKind:ssh` exposes no tools to the agent or MCP until a session of that
+  kind exists, and hides again when the last one goes away — Serial / SSH / SFTP /
+  Timeline appear on demand, and the Kits panel marks them "waiting for a device"
 - The host **validates arguments against each tool's JSON Schema** (required
   keys / types) before running it, at both call sites (built-in agent, MCP
   bridge) — a prerequisite for later external kits
@@ -56,7 +60,7 @@ internal/kits/   built-in Kit implementations; Builtin(deps) returns them all
 internal/agent/  consumes only kit.Registry, no hard-coded tools
 ```
 
-Next phases: external `kit.json` manifests, external Kits over MCP, and a Kits management page.
+Next phases: external `kit.json` manifests and external Kits over MCP.
 
 ## Agent + Kit
 
@@ -72,7 +76,10 @@ connectors:
 - **Enable/disable**: "Tools → Kits…" or "Kits…" in the Agent panel
   - A disabled Kit **does not expose tools to the agent or MCP and cannot run**
     (calls return "unknown tool")
-  - The panel shows each Kit's version, license, activation events, tools and risk levels
+  - Device-dependent Kits (Serial / SSH / SFTP / Timeline) are **also hidden
+    while no matching device session exists**, and appear once one connects
+  - The panel shows each Kit's version, license, activation events, tools and
+    risk levels, and marks the "disabled / waiting for a device" state
   - The choice is persisted to `kits.disabled` in `~/.config/edgekit/settings.json`
 - **Attribution**: tool cards in the transcript show which Kit they came from
   (e.g. `Serial · serial_read`)

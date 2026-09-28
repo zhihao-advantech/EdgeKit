@@ -20,7 +20,7 @@ func (serialKit) Manifest() kit.Manifest {
 		Version:     "0.1.0",
 		License:     "Apache-2.0",
 		Runtime:     "builtin",
-		Activation:  []string{"onStartup", "onDeviceKind:serial"},
+		Activation:  []string{kit.DeviceKindEvent("serial")},
 		Description: "串口收发、命令执行与设备目录抓取",
 	}
 }

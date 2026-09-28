@@ -159,6 +159,10 @@ func New() *Server {
 	for _, k := range kits.Builtin(s.deps) {
 		s.kits.Register(k)
 	}
+	// No device session exists yet: the device-kind activation events start
+	// unsatisfied, so device-dependent kits stay hidden from the agent and
+	// MCP until a session appears.
+	s.updateDeviceEvents()
 	s.gate = policy.New(s.onApprovalRequest)
 	s.agent = agent.New(s.kits, s.deps, s.gate, s.onAgentEvent)
 	s.batch = newStreamBatcher(s.emitStream)
@@ -254,6 +258,7 @@ func (s *Server) registerSession(ds *deviceSession) {
 	if focus == ds.id {
 		s.broadcast("session.focus", map[string]any{"id": focus})
 	}
+	s.updateDeviceEvents()
 }
 
 // closeSession tears down a session and notifies clients.
@@ -314,6 +319,27 @@ func (s *Server) closeSession(id string) {
 	if focus != "" {
 		s.broadcast("session.focus", map[string]any{"id": focus})
 	}
+	s.updateDeviceEvents()
+}
+
+// updateDeviceEvents fires the device-kind activation events: a kit whose
+// capabilities need a device of a kind stays hidden from the agent and MCP
+// until a session of that kind exists, and disappears again when the last one
+// goes away.
+func (s *Server) updateDeviceEvents() {
+	s.mu.Lock()
+	var serialActive, sshActive bool
+	for _, ds := range s.sessions {
+		switch ds.kind {
+		case "serial":
+			serialActive = true
+		case "ssh":
+			sshActive = true
+		}
+	}
+	s.mu.Unlock()
+	s.kits.SetEvent(kit.DeviceKindEvent("serial"), serialActive)
+	s.kits.SetEvent(kit.DeviceKindEvent("ssh"), sshActive)
 }
 
 func sessionInfo(ds *deviceSession) map[string]any {
@@ -1068,6 +1094,7 @@ func (s *Server) sendStatus(c *client) {
 type kitView struct {
 	kit.Manifest
 	Enabled bool       `json:"enabled"`
+	Active  bool       `json:"active"` // enabled and activation satisfied
 	Tools   []toolView `json:"tools"`
 }
 
@@ -1089,7 +1116,12 @@ func (s *Server) kitsPayload() map[string]any {
 		for _, t := range tools {
 			tv = append(tv, toolView{Name: t.Name, Description: t.Description, Risk: string(t.Risk)})
 		}
-		views = append(views, kitView{Manifest: m, Enabled: s.kits.IsEnabled(m.ID), Tools: tv})
+		views = append(views, kitView{
+			Manifest: m,
+			Enabled:  s.kits.IsEnabled(m.ID),
+			Active:   s.kits.IsActive(m.ID),
+			Tools:    tv,
+		})
 	}
 	return map[string]any{"kits": views}
 }
