@@ -35,7 +35,11 @@ share one single definition**:
 - Built-in Kits: `Host`, `Network`, `Serial`, `SSH`, `SFTP`, `Workspace`, `CodeEdit`, `Timeline` — 24 tools in total
 - Each Kit carries a `Manifest` (`id` / `name` / `version` / `license` / `runtime` / `activation`)
   and a set of `Tool`s (JSON Schema + risk level `read` / `mutate` / `dangerous`)
-- The host requires approval for non-`read` tools (reusing the existing approval flow)
+- The host **validates arguments against each tool's JSON Schema** (required
+  keys / types) before running it, at both call sites (built-in agent, MCP
+  bridge) — a prerequisite for later external kits
+- The host requires approval for non-`read` tools (reusing the existing
+  approval flow); validation happens **before** the approval gate
 - "Help → About" shows the loaded Kits and tool counts
 
 Code layout:

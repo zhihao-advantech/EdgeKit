@@ -31,7 +31,9 @@ AI Agent、串口调试、SSH 终端、工作区文件管理，支持**同时连
 - 内置 Kit：`Host`、`Network`、`Serial`、`SSH`、`SFTP`、`Workspace`、`CodeEdit`、`Timeline`，共 24 个工具
 - 每个 Kit 带 `Manifest`（`id` / `name` / `version` / `license` / `runtime` / `activation`）
   与一组 `Tool`（JSON Schema + 风险等级 `read` / `mutate` / `dangerous`）
-- 宿主对非 `read` 工具要求审批（沿用现有 approval 流程）
+- 宿主在执行前**统一按 JSON Schema 校验参数**（必填项 / 类型），两个调用入口
+  （内置 Agent、MCP 桥）共用同一道校验——这是后续接入外置 Kit 的安全前置
+- 宿主对非 `read` 工具要求审批（沿用现有 approval 流程），**校验发生在审批之前**
 - 「帮助 → 关于」可查看已加载的 Kit 与工具统计
 
 代码结构：

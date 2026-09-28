@@ -207,6 +207,49 @@ func TestAgentApproval(t *testing.T) {
 	}
 }
 
+func TestAgentRejectsInvalidToolArgs(t *testing.T) {
+	serial := &stubSerial{open: true}
+	var reqs []chatRequest
+	srv := mockLLM(t, []string{
+		// serial_write without its required "data": rejected by the host's
+		// schema validation before the approval gate and the write.
+		`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"serial_write","arguments":"{}"}}]}}]}`,
+		`{"choices":[{"message":{"role":"assistant","content":"参数不完整，已放弃"}}]}`,
+	}, &reqs)
+
+	c := newCollector()
+	ag := newTestManager(Deps{Serial: serial}, testGate(false), c.on)
+	ag.SetConfig(Config{BaseURL: srv.URL, APIKey: "test", Model: "mock"})
+	ag.Send("发送重启")
+	c.wait(t)
+
+	var rejected bool
+	for _, e := range c.find(KindTool) {
+		if e.Tool == "serial_write" && e.State == "error" && strings.Contains(e.Result, "参数缺少必填项: data") {
+			rejected = true
+		}
+	}
+	if !rejected {
+		t.Fatalf("invalid args should be rejected, got %+v", c.find(KindTool))
+	}
+	if len(serial.written) != 0 {
+		t.Fatalf("nothing should reach the serial port, got %q", serial.written)
+	}
+	// The rejection is fed back to the model as the tool result.
+	if len(reqs) < 2 {
+		t.Fatal("expected the model to see the rejection")
+	}
+	sawRejection := false
+	for _, m := range reqs[1].Messages {
+		if m.Role == "tool" && m.ToolCallID == "call_1" && strings.Contains(m.Content, "参数缺少必填项") {
+			sawRejection = true
+		}
+	}
+	if !sawRejection {
+		t.Fatal("rejection not sent back to the model")
+	}
+}
+
 func TestAgentLocalHelp(t *testing.T) {
 	c := newCollector()
 	ag := newTestManager(Deps{}, testGate(true), c.on)

@@ -347,6 +347,13 @@ func (m *Manager) runTool(ctx context.Context, name string, args map[string]any,
 	kitID, _ := m.registry.ToolKit(name)
 	argText := marshalArgs(args)
 
+	// The tool contract is checked before the approval gate, so a mutating
+	// call with invalid arguments is rejected without bothering the user.
+	if err := t.ValidateArgs(args); err != nil {
+		m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: "error", Result: err.Error()})
+		return "", err
+	}
+
 	if !force && m.gate != nil {
 		if err := m.gate.Check(ctx, name, t.Risk, argText); err != nil {
 			m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: "denied", Result: err.Error()})

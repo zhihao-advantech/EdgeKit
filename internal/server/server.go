@@ -976,6 +976,13 @@ func (s *Server) handleToolCall(c *client, msg message) {
 		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": "未知工具: " + p.Name})
 		return
 	}
+	// The tool contract is checked before the approval gate: an external
+	// caller (MCP bridge, later external kits) never reaches a tool with
+	// arguments that violate its schema.
+	if err := t.ValidateArgs(p.Args); err != nil {
+		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": err.Error()})
+		return
+	}
 	argBytes, _ := json.Marshal(p.Args)
 	argText := string(argBytes)
 

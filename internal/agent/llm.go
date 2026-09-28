@@ -80,7 +80,12 @@ func (m *Manager) runLLM(ctx context.Context) {
 					args = nil
 				}
 			}
-			out, _ := m.runTool(ctx, tc.Function.Name, args, false)
+			out, err := m.runTool(ctx, tc.Function.Name, args, false)
+			if err != nil && out == "" {
+				// Surface the failure (rejected arguments, unknown tool) as
+				// the tool result so the model can correct itself.
+				out = err.Error()
+			}
 			m.appendMessage(chatMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,
