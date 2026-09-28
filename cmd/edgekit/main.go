@@ -14,15 +14,18 @@ import (
 	"flag"
 	"log"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 
 	"edgekit/internal/server"
 
 	webview "github.com/webview/webview_go"
 )
 
-// appVersion is reported to MCP clients.
-const appVersion = "0.1.0"
+// appVersion is reported to MCP clients and stamped into packages. It is a var
+// (not a const) so the build can inject it with -ldflags "-X main.appVersion=...".
+var appVersion = "0.1.0"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
@@ -34,6 +37,7 @@ func main() {
 
 	addr := flag.String("addr", "127.0.0.1:0", "内部 WebSocket 监听地址（仅供界面通信）")
 	debug := flag.Bool("debug", false, "启用 WebView 开发者工具")
+	headless := flag.Bool("headless", false, "只运行后端服务，不打开窗口（服务器 / 远程调试用）")
 	flag.Parse()
 
 	srv := server.New()
@@ -48,6 +52,16 @@ func main() {
 	log.Printf("EdgeKit 内部服务: %s", wsURL)
 	if exe, err := os.Executable(); err == nil {
 		log.Printf("MCP 接入: openclaw mcp add edgekit --command %s --arg mcp", exe)
+	}
+
+	// Headless: no window, no display needed; keep serving until interrupted.
+	if *headless {
+		log.Printf("EdgeKit headless 模式已启动，按 Ctrl+C 退出")
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		log.Printf("正在退出…")
+		return
 	}
 
 	page, err := server.Page(wsURL)
