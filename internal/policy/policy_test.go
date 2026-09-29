@@ -12,7 +12,7 @@ import (
 func TestReadIsAllowedWithoutAsking(t *testing.T) {
 	asked := false
 	g := New(func(Request) { asked = true })
-	if err := g.Check(context.Background(), "serial_read", kit.RiskRead, ""); err != nil {
+	if err := g.Check(context.Background(), "", "serial_read", kit.RiskRead, ""); err != nil {
 		t.Fatalf("read tool should always run: %v", err)
 	}
 	if asked {
@@ -20,21 +20,50 @@ func TestReadIsAllowedWithoutAsking(t *testing.T) {
 	}
 }
 
-func TestDangerousIsBlocked(t *testing.T) {
-	asked := false
-	g := New(func(Request) { asked = true })
-	if err := g.Check(context.Background(), "flash", kit.RiskDangerous, ""); err != ErrBlocked {
-		t.Fatalf("err = %v, want ErrBlocked", err)
+func TestDangerousAlwaysAsksEvenWithAutoRun(t *testing.T) {
+	prompted := make(chan string, 1)
+	g := New(func(r Request) { prompted <- r.ID })
+	g.SetAutoRun(true)
+
+	done := make(chan error, 1)
+	go func() { done <- g.Check(context.Background(), "kit.x", "flash", kit.RiskDangerous, "") }()
+
+	select {
+	case id := <-prompted:
+		g.Approve(id, true)
+	case <-time.After(2 * time.Second):
+		t.Fatal("dangerous tool must still prompt with auto-run on")
 	}
-	if asked {
-		t.Fatal("dangerous tool must not prompt")
+	if err := <-done; err != nil {
+		t.Fatalf("approved dangerous call should pass: %v", err)
+	}
+}
+
+func TestExternalKitNeverAutoRuns(t *testing.T) {
+	prompted := make(chan string, 1)
+	g := New(func(r Request) { prompted <- r.ID })
+	g.SetAutoRun(true)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- g.Check(context.Background(), "edgekit.connector.kb", "kb_write", kit.RiskMutate, "")
+	}()
+
+	select {
+	case id := <-prompted:
+		g.Approve(id, true)
+	case <-time.After(2 * time.Second):
+		t.Fatal("external connector tools must prompt even with auto-run on")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("approved external call should pass: %v", err)
 	}
 }
 
 func TestAutoRunSkipsApproval(t *testing.T) {
 	g := New(func(Request) { t.Fatal("auto-run must not prompt") })
 	g.SetAutoRun(true)
-	if err := g.Check(context.Background(), "serial_write", kit.RiskMutate, `{"data":"x"}`); err != nil {
+	if err := g.Check(context.Background(), "", "serial_write", kit.RiskMutate, `{"data":"x"}`); err != nil {
 		t.Fatalf("auto-run mutate should pass: %v", err)
 	}
 }
@@ -53,7 +82,7 @@ func TestMutateAsksAndHonoursApproval(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- g.Check(context.Background(), "ssh_exec", kit.RiskMutate, `{"command":"reboot"}`)
+		done <- g.Check(context.Background(), "", "ssh_exec", kit.RiskMutate, `{"command":"reboot"}`)
 	}()
 
 	// wait for the prompt, then allow it
@@ -82,7 +111,7 @@ func TestMutateDenied(t *testing.T) {
 	g := New(func(r Request) { prompted <- r.ID })
 
 	done := make(chan error, 1)
-	go func() { done <- g.Check(context.Background(), "ssh_exec", kit.RiskMutate, "") }()
+	go func() { done <- g.Check(context.Background(), "", "ssh_exec", kit.RiskMutate, "") }()
 
 	select {
 	case id := <-prompted:
@@ -100,7 +129,7 @@ func TestPromptTimeout(t *testing.T) {
 	g.timeout = 60 * time.Millisecond
 
 	done := make(chan error, 1)
-	go func() { done <- g.Check(context.Background(), "ssh_exec", kit.RiskMutate, "") }()
+	go func() { done <- g.Check(context.Background(), "", "ssh_exec", kit.RiskMutate, "") }()
 
 	select {
 	case err := <-done:
@@ -116,7 +145,7 @@ func TestContextCancelUnblocks(t *testing.T) {
 	g := New(func(Request) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- g.Check(ctx, "ssh_exec", kit.RiskMutate, "") }()
+	go func() { done <- g.Check(ctx, "", "ssh_exec", kit.RiskMutate, "") }()
 	time.Sleep(20 * time.Millisecond)
 	cancel()
 	select {

@@ -63,6 +63,7 @@ type Client struct {
 	seq     int64
 	pending map[int64]chan rpcResult
 	tools   []Tool
+	proto   string // negotiated server protocol version
 
 	started  atomic.Bool
 	closing  atomic.Bool
@@ -207,12 +208,36 @@ func (c *Client) initialize(ctx context.Context) error {
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]string{"name": "edgekit", "version": "0.1.0"},
 	}
-	if _, err := c.call(ctx, "initialize", params); err != nil {
+	raw, err := c.call(ctx, "initialize", params)
+	if err != nil {
 		return fmt.Errorf("MCP initialize: %w", err)
+	}
+	var out struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	c.mu.Lock()
+	c.proto = out.ProtocolVersion
+	c.mu.Unlock()
+	if out.ProtocolVersion != "" && out.ProtocolVersion != ProtocolVersion && c.opts.Logf != nil {
+		c.opts.Logf("MCP 协议版本不一致：本地 %s，服务 %s（%s）",
+			ProtocolVersion, out.ProtocolVersion, out.ServerInfo.Name)
 	}
 	// The notification needs no reply.
 	_ = c.notify("notifications/initialized", nil)
 	return nil
+}
+
+// ServerProtocol returns the protocol version the server negotiated ("" if it
+// did not report one).
+func (c *Client) ServerProtocol() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.proto
 }
 
 // listTools fetches and caches tools/list; returns the sorted list.

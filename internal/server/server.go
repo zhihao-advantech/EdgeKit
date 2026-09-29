@@ -1239,7 +1239,8 @@ func (s *Server) handleToolCall(c *client, msg message) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), kit.DefaultCallTimeout)
 	defer cancel()
-	if err := s.gate.Check(ctx, p.Name, t.Risk, argText); err != nil {
+	kitID, _ := s.kits.ToolKit(p.Name)
+	if err := s.gate.Check(ctx, kitID, p.Name, t.Risk, argText); err != nil {
 		s.record(auditID, timeline.Record{Channel: timeline.ChannelAgent, Kind: "result", Data: []byte(p.Name + " denied: " + err.Error())})
 		s.sendTo(c, "tool.result", map[string]any{"id": p.ID, "name": p.Name, "ok": false, "error": err.Error()})
 		return

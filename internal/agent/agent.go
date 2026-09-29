@@ -366,7 +366,7 @@ func (m *Manager) runTool(ctx context.Context, name string, args map[string]any,
 	m.recordToolCall(ctx, "action", name+" "+argText)
 
 	if !force && m.gate != nil {
-		if err := m.gate.Check(ctx, name, t.Risk, argText); err != nil {
+		if err := m.gate.Check(ctx, kitID, name, t.Risk, argText); err != nil {
 			m.emit(Event{Kind: KindTool, Kit: kitID, Tool: name, Args: argText, State: "denied", Result: err.Error()})
 			m.recordToolCall(ctx, "result", name+" denied: "+err.Error())
 			return err.Error(), nil

@@ -508,7 +508,11 @@ func (b *acpBackend) onPermission(ctx context.Context, req acp.PermissionRequest
 
 	allow := true
 	if b.m.gate != nil {
-		if err := b.m.gate.Check(ctx, tool, kit.RiskMutate, args); err != nil {
+		// The external agent names its own tools; look up the kit for policy
+		// (external connector tools never auto-run). Unknown names fall back to
+		// a generic kit id.
+		kitID, _ := b.m.registry.ToolKit(tool)
+		if err := b.m.gate.Check(ctx, kitID, tool, kit.RiskMutate, args); err != nil {
 			allow = false
 		}
 	}

@@ -1,9 +1,13 @@
 // Package policy is EdgeKit's approval gate: the single place that decides
 // whether a tool call may run.
 //
-// read  → allow
-// mutate → ask the user, unless auto-run is enabled
-// dangerous → deny
+// read      → allow
+// mutate    → ask the user, unless auto-run is enabled
+// dangerous → always ask the user (never auto-run)
+//
+// Runtime-attached external kits (MCP connectors) never inherit the global
+// auto-run switch, so attaching a third-party server cannot silently grant it
+// unattended write access.
 //
 // The built-in agent and the MCP surface both go through it, so a mutating
 // action is gated identically no matter which brain requested it.
@@ -12,6 +16,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +29,12 @@ var (
 	ErrTimeout = errors.New("审批超时")
 	ErrBlocked = errors.New("该操作被策略禁止")
 )
+
+// externalKitPrefix marks kits attached at runtime (MCP connectors), whose
+// tools never inherit the global auto-run switch.
+const externalKitPrefix = "edgekit.connector."
+
+func externalKit(kitID string) bool { return strings.HasPrefix(kitID, externalKitPrefix) }
 
 // Request is an approval prompt shown to the user.
 type Request struct {
@@ -82,15 +93,15 @@ func (g *Gate) Approve(id string, allow bool) {
 	}
 }
 
-// Check returns nil when the call may proceed.
-func (g *Gate) Check(ctx context.Context, toolName string, risk kit.Risk, argsText string) error {
-	switch risk {
-	case kit.RiskRead:
+// Check returns nil when the call may proceed. kitID lets the gate treat
+// runtime-attached external kits (connectors) specially: they never inherit the
+// global auto-run switch, and "dangerous" tools always require an explicit,
+// per-call approval even when auto-run is on.
+func (g *Gate) Check(ctx context.Context, kitID, toolName string, risk kit.Risk, argsText string) error {
+	if risk == kit.RiskRead {
 		return nil
-	case kit.RiskDangerous:
-		return ErrBlocked
 	}
-	if g.AutoRun() {
+	if g.AutoRun() && risk != kit.RiskDangerous && !externalKit(kitID) {
 		return nil
 	}
 

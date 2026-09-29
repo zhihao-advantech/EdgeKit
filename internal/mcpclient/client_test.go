@@ -63,6 +63,9 @@ func TestClientHandshakeAndCall(t *testing.T) {
 	if !cli.Alive() {
 		t.Fatal("client should be alive")
 	}
+	if got := cli.ServerProtocol(); got != mcp.ProtocolVersion {
+		t.Fatalf("negotiated protocol = %q, want %q", got, mcp.ProtocolVersion)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
