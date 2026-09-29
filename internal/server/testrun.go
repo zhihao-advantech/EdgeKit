@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"path"
 	"regexp"
 	"strconv"
@@ -381,7 +383,8 @@ func (d testDevice) Exec(ctx context.Context, command string) (string, bool, err
 		// sshclient appends "(exit: ...)" to the output on a non-zero exit.
 		return out, !strings.Contains(out, "(exit:"), nil
 	case ds.serial != nil && ds.serial.IsOpen():
-		out, err := ds.serial.RunCapture(command, 500*time.Millisecond, 8*time.Second)
+		// Silent: the test's command and its echo must not pollute the terminal.
+		out, err := ds.serial.RunCaptureSilent(command, 500*time.Millisecond, 8*time.Second)
 		if err != nil {
 			return out, false, err
 		}
@@ -465,7 +468,7 @@ func (d testDevice) RunScript(ctx context.Context, script string) (string, bool,
 		const tag = "__EDGEKIT_EXIT__"
 		cmd := "cat > " + remote + " <<'EK_SCRIPT_EOF'\n" + string(data) +
 			"\nEK_SCRIPT_EOF\nsh " + remote + "; echo " + tag + "$?"
-		out, err := ds.serial.RunCapture(cmd, 500*time.Millisecond, 60*time.Second)
+		out, err := ds.serial.RunCaptureSilent(cmd, 500*time.Millisecond, 60*time.Second)
 		if err != nil {
 			return out, false, err
 		}
@@ -477,4 +480,73 @@ func (d testDevice) RunScript(ctx context.Context, script string) (string, bool,
 	}
 
 	return "", false, fmt.Errorf("脚本测试需要已连接的 SSH（含 SFTP）或串口会话")
+}
+
+// handleDeleteDef removes a saved test case from the workspace.
+func (m *testManager) handleDeleteDef(c *client, msg message) {
+	var p struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	if err := (testrun.Store{}).DeleteDefinition(p.Path); err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	m.s.sendTo(c, "test.deleted", map[string]any{"path": p.Path})
+	m.broadcastDefs()
+}
+
+// handleDeleteRun removes an archived run.
+func (m *testManager) handleDeleteRun(c *client, msg message) {
+	var p struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	if err := (testrun.Store{}).DeleteRun(p.RunID); err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	m.mu.Lock()
+	delete(m.runs, p.RunID)
+	m.mu.Unlock()
+	m.s.sendTo(c, "test.deleted", map[string]any{"runId": p.RunID})
+	m.broadcastDefs()
+}
+
+// handleOpenDir opens a workspace folder in the desktop file manager so scripts
+// can be dropped in.
+func (m *testManager) handleOpenDir(c *client, msg message) {
+	var p struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(msg.Payload, &p)
+	rel := strings.TrimSpace(p.Path)
+	if rel == "" {
+		rel = "tests"
+	}
+	abs, err := workspace.Resolve(rel)
+	if err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	if _, err := exec.LookPath("xdg-open"); err != nil {
+		m.s.sendError(c, fmt.Errorf("未找到 xdg-open，无法打开文件夹：%s", abs))
+		return
+	}
+	cmd := exec.Command("xdg-open", abs)
+	if err := cmd.Start(); err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	go func() { _ = cmd.Wait() }()
 }

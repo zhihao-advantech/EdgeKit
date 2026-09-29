@@ -100,3 +100,37 @@ func TestStoreListScripts(t *testing.T) {
 		t.Fatalf("scripts = %+v", scripts)
 	}
 }
+
+func TestStoreDelete(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st := Store{}
+
+	rel, err := st.WriteDefinition(Definition{Name: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := NewRun("run-del", "x", "serial-1", Definition{Name: "x"})
+	if _, err := st.Archive(run); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.DeleteDefinition(rel); err != nil {
+		t.Fatalf("delete definition: %v", err)
+	}
+	if len(st.ListDefinitions()) != 0 {
+		t.Fatal("definition still listed")
+	}
+	if err := st.DeleteRun("run-del"); err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+	if len(st.ListRuns()) != 0 {
+		t.Fatal("run still listed")
+	}
+
+	if err := st.DeleteDefinition("etc/passwd"); err == nil {
+		t.Fatal("should reject paths outside tests/")
+	}
+	if err := st.DeleteRun("../etc"); err == nil {
+		t.Fatal("should reject run ids with a separator")
+	}
+}

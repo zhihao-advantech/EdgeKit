@@ -772,6 +772,7 @@
         break;
       }
       case "test.defs": onTestDefs(msg.payload || {}); break;
+      case "test.deleted": toast("已删除"); break;
       case "test.definition": onTestDefinition(msg.payload || {}); break;
       case "test.saved":
         toast("已保存到工作区：" + ((msg.payload && msg.payload.path) || ""));
@@ -1632,10 +1633,10 @@
   const TEST_SVG = '<svg viewBox="0 0 16 16"><path d="M6 2h6.5a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V6z"/><path d="M6 2v3.5H3"/><path d="M5.4 9.2l1.4 1.4 2.8-3"/></svg>';
 
   function blankCheck() {
-    return { name: "", command: "", expect: "", expectNot: false, exitZero: false, timeoutMs: 10000 };
+    return { name: "", command: "", script: "", expect: "", expectNot: false, exitZero: false, timeoutMs: 10000 };
   }
   function blankDraft() {
-    return { name: "测试", script: "", expect: "", expectNot: false, exitZero: false, timeoutMs: 60000, checks: [blankCheck()] };
+    return { name: "测试", checks: [blankCheck()] };
   }
   function newTest() {
     state.testDraft = blankDraft();
@@ -1686,14 +1687,10 @@
     const d = state.testDraft || { name: "测试", checks: [] };
     return {
       name: (d.name || "测试").trim() || "测试",
-      script: d.script || "",
-      expect: d.expect || "",
-      expectNot: !!d.expectNot,
-      exitZero: !!d.exitZero,
-      timeoutMs: Number(d.timeoutMs) || 0,
       checks: (d.checks || []).map((c) => ({
         name: c.name || "",
         command: c.command || "",
+        script: c.script || "",
         expect: c.expect || "",
         expectNot: !!c.expectNot,
         exitZero: !!c.exitZero,
@@ -1704,14 +1701,10 @@
   function defToDraft(def) {
     return {
       name: (def && def.name) || "测试",
-      script: (def && def.script) || "",
-      expect: (def && def.expect) || "",
-      expectNot: !!(def && def.expectNot),
-      exitZero: !!(def && def.exitZero),
-      timeoutMs: (def && def.timeoutMs) || 60000,
       checks: ((def && def.checks) || []).map((c) => ({
-        name: c.name || "", command: c.command || "", expect: c.expect || "",
-        expectNot: !!c.expectNot, exitZero: !!c.exitZero, timeoutMs: c.timeoutMs || 10000,
+        name: c.name || "", command: c.command || "", script: c.script || "",
+        expect: c.expect || "", expectNot: !!c.expectNot, exitZero: !!c.exitZero,
+        timeoutMs: c.timeoutMs || 10000,
       })),
     };
   }
@@ -1748,17 +1741,45 @@
   }
   function showDefinitions() {
     const defs = state.testDefs.definitions || [];
-    if (!defs.length) { toast("工作区 tests/ 下暂无 .test.json 定义"); return; }
-    const rows = defs
-      .map((d) => `<button class="btn small block def-pick" data-def="${esc(d.path)}">${esc(d.name)}<span class="muted"> · ${esc(d.path)}</span></button>`)
-      .join("");
-    showModal("从工作区加载测试定义", `<p class="muted">选择 <code>tests/</code> 下的定义载入编辑器：</p><div class="def-list">${rows}</div>`);
-    document.querySelectorAll("#modal-body .def-pick").forEach((b) => {
-      b.addEventListener("click", () => {
-        send("test.load", { path: b.dataset.def });
-        closeModal();
-      });
-    });
+    const runs = state.testDefs.runs || [];
+    const defRows = defs.length
+      ? defs.map((d) => `<div class="def-row">
+          <button class="btn small def-pick" data-def="${esc(d.path)}">${esc(d.name)}<span class="muted"> · ${esc(d.path)}</span></button>
+          <button class="iconbtn danger def-del" data-def="${esc(d.path)}" title="删除定义">×</button>
+        </div>`).join("")
+      : '<p class="muted">tests/ 下暂无 .test.json 定义。</p>';
+    const runRows = runs.length
+      ? runs.map((r) => `<div class="def-row">
+          <button class="btn small run-open" data-run="${esc(r.id)}">${esc(r.name || r.id)}<span class="muted"> · ${esc(runStatusLabel({ status: r.status }))}</span></button>
+          <button class="iconbtn danger run-del" data-run="${esc(r.id)}" title="删除运行记录">×</button>
+        </div>`).join("")
+      : '<p class="muted">暂无归档运行。</p>';
+    showModal("测试定义与历史", `
+      <div class="row"><button class="btn small" id="def-folder">打开 tests 文件夹</button><button class="btn small" id="def-refresh">刷新</button></div>
+      <div class="pane-subtitle">测试定义</div><div class="def-list">${defRows}</div>
+      <div class="pane-subtitle">归档运行</div><div class="def-list">${runRows}</div>`);
+    document.querySelectorAll("#modal-body .def-pick").forEach((b) => b.addEventListener("click", () => {
+      send("test.load", { path: b.dataset.def });
+      closeModal();
+    }));
+    document.querySelectorAll("#modal-body .def-del").forEach((b) => b.addEventListener("click", () => {
+      send("test.deleteDef", { path: b.dataset.def });
+      const row = b.closest(".def-row");
+      if (row) row.remove();
+    }));
+    document.querySelectorAll("#modal-body .run-open").forEach((b) => b.addEventListener("click", () => {
+      closeModal();
+      openArchivedRun(b.dataset.run);
+    }));
+    document.querySelectorAll("#modal-body .run-del").forEach((b) => b.addEventListener("click", () => {
+      send("test.deleteRun", { runId: b.dataset.run });
+      const row = b.closest(".def-row");
+      if (row) row.remove();
+    }));
+    const folder = $("def-folder");
+    if (folder) folder.addEventListener("click", openTestsFolder);
+    const refresh = $("def-refresh");
+    if (refresh) refresh.addEventListener("click", () => { send("test.defs", nil); setTimeout(showDefinitions, 250); });
   }
   function openArchivedRun(id) {
     state.activeTestId = id;
@@ -1832,28 +1853,6 @@
     $("test-start").textContent = run && testFinished(run) ? "再次运行" : "开始测试";
     $("test-abort").disabled = !(run && !testFinished(run));
 
-    const scriptSel = $("test-script");
-    scriptSel.textContent = "";
-    const none = document.createElement("option");
-    none.value = "";
-    none.textContent = "（不使用脚本，用下面的检查项）";
-    scriptSel.appendChild(none);
-    for (const s of state.testDefs.scripts || []) {
-      const o = document.createElement("option");
-      o.value = s.path;
-      o.textContent = s.name;
-      scriptSel.appendChild(o);
-    }
-    scriptSel.value = state.testDraft.script || "";
-    $("test-script-expect").value = state.testDraft.expect || "";
-    $("test-script-timeout").value = state.testDraft.timeoutMs || 60000;
-    $("test-script-exitzero").checked = !!state.testDraft.exitZero;
-    const hasScript = !!state.testDraft.script;
-    $("test-script-opts").classList.toggle("hidden", !hasScript);
-    $("test-checks").classList.toggle("dim", hasScript);
-    $("test-hint").textContent = hasScript
-      ? "已选择脚本：运行测试时会在目标设备上执行该脚本（SSH 经 SFTP 上传，串口用 heredoc），忽略下面的检查项。"
-      : "选择目标会话后点「开始测试」，将依次执行 连接 → 运行 → 生成 → 归档。";
     renderChecks();
     renderStepper(run);
     renderTestDetail(run);
@@ -1864,30 +1863,69 @@
     (state.testDraft.checks || []).forEach((c, i) => {
       const row = document.createElement("div");
       row.className = "check-row";
+      const isScript = !!c.script;
       row.innerHTML = `
         <input class="ci-name" placeholder="名称" value="${esc(c.name || "")}">
-        <input class="ci-cmd" placeholder="命令（可空，仅等输出）" value="${esc(c.command || "")}">
+        <div class="ci-target">
+          <input class="ci-cmd" placeholder="测试指令（shell 命令）" value="${esc(isScript ? c.script : (c.command || ""))}" ${isScript ? "readonly" : ""}>
+          <button class="ci-btn ci-folder" title="打开 tests 文件夹，放入脚本">📁</button>
+          <button class="ci-btn ci-script" title="选择工作区脚本">脚本</button>
+        </div>
         <input class="ci-exp" placeholder="期望输出（正则）" value="${esc(c.expect || "")}">
         <input class="ci-to" type="number" min="0" step="500" title="期望超时(ms)" value="${esc(String(c.timeoutMs || 10000))}">
         <label class="ci-chk" title="要求退出码为 0"><input type="checkbox" ${c.exitZero ? "checked" : ""}>0</label>
         <label class="ci-chk" title="期望不匹配"><input type="checkbox" ${c.expectNot ? "checked" : ""}>非</label>
-        <button class="iconbtn danger ci-del" title="删除">×</button>`;
+        <button class="iconbtn danger ci-del" title="删除此检查">×</button>`;
       const boxes = row.querySelectorAll("input[type=checkbox]");
+      const cmdEl = row.querySelector(".ci-cmd");
       const upd = () => {
         c.name = row.querySelector(".ci-name").value;
-        c.command = row.querySelector(".ci-cmd").value;
+        if (!c.script) c.command = cmdEl.value;
         c.expect = row.querySelector(".ci-exp").value;
         c.timeoutMs = Number(row.querySelector(".ci-to").value) || 0;
         c.exitZero = boxes[0].checked;
         c.expectNot = boxes[1].checked;
       };
       row.querySelectorAll("input").forEach((el) => el.addEventListener("change", upd));
+      row.querySelector(".ci-folder").addEventListener("click", openTestsFolder);
+      row.querySelector(".ci-script").addEventListener("click", () => showScriptPicker(i));
       row.querySelector(".ci-del").addEventListener("click", () => {
         state.testDraft.checks.splice(i, 1);
         renderChecks();
       });
       box.appendChild(row);
     });
+  }
+
+  // openTestsFolder reveals the workspace tests/ directory in the file manager.
+  function openTestsFolder() {
+    send("test.openDir", { path: "tests" });
+  }
+
+  // showScriptPicker lets a check run a workspace script instead of a command.
+  // "（不使用脚本）" clears it and restores the inline command.
+  function showScriptPicker(index) {
+    const c = state.testDraft.checks[index];
+    if (!c) return;
+    const scripts = state.testDefs.scripts || [];
+    const opts = ['<button class="btn small block def-pick" data-script="">（不使用脚本，用上面的指令）</button>']
+      .concat(scripts.map((s) => `<button class="btn small block def-pick" data-script="${esc(s.path)}">${esc(s.name)}<span class="muted"> · ${esc(s.path)}</span></button>`))
+      .join("");
+    const empty = scripts.length ? "" : '<p class="muted">tests/ 下暂无 .sh 脚本，点「打开文件夹」放入脚本后刷新。</p>';
+    showModal("选择脚本", `<div class="row"><button class="btn small" id="pick-folder">打开文件夹</button><button class="btn small" id="pick-refresh">刷新</button></div>${empty}<div class="def-list">${opts}</div>`);
+    document.querySelectorAll("#modal-body .def-pick").forEach((b) => {
+      b.addEventListener("click", () => {
+        const path = b.dataset.script || "";
+        c.script = path;
+        if (path) c.command = "";
+        closeModal();
+        renderChecks();
+      });
+    });
+    const folderBtn = $("pick-folder");
+    if (folderBtn) folderBtn.addEventListener("click", openTestsFolder);
+    const refreshBtn = $("pick-refresh");
+    if (refreshBtn) refreshBtn.addEventListener("click", () => { send("test.defs", nil); setTimeout(() => showScriptPicker(index), 250); });
   }
   function renderStepper(run) {
     const ol = $("test-stepper");
@@ -1966,13 +2004,6 @@
       $("tab-test-label").textContent = "测试 · " + ($("test-name").value || "测试");
     });
     $("test-add").addEventListener("click", () => { state.testDraft.checks.push(blankCheck()); renderChecks(); });
-    $("test-script").addEventListener("change", () => {
-      state.testDraft.script = $("test-script").value;
-      renderTestView();
-    });
-    $("test-script-expect").addEventListener("change", () => { state.testDraft.expect = $("test-script-expect").value; });
-    $("test-script-timeout").addEventListener("change", () => { state.testDraft.timeoutMs = Number($("test-script-timeout").value) || 0; });
-    $("test-script-exitzero").addEventListener("change", () => { state.testDraft.exitZero = $("test-script-exitzero").checked; });
     $("test-load").addEventListener("click", showDefinitions);
     $("test-save").addEventListener("click", saveDefinition);
     $("test-start").addEventListener("click", startTest);

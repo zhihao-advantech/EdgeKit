@@ -226,7 +226,7 @@ func TestReportFixComparison(t *testing.T) {
 func TestRunScriptCase(t *testing.T) {
 	dev := connected()
 	dev.scriptOut = "smoke: ALL TESTS PASSED\n"
-	def := Definition{Name: "smoke", Script: "tests/smoke.sh", Expect: "PASSED", ExitZero: true}
+	def := Definition{Name: "smoke", Checks: []Check{{Script: "tests/smoke.sh", Expect: "PASSED", ExitZero: true}}}
 	r := New("r-s", "smoke", "serial-1", def, dev, &fakeArchiver{path: "tests/runs/r-s"}, nil)
 
 	r.RunAll(context.Background())
@@ -247,7 +247,7 @@ func TestRunScriptCase(t *testing.T) {
 func TestRunScriptCaseFails(t *testing.T) {
 	dev := connected()
 	dev.scriptOut = "smoke: FAILED\n"
-	def := Definition{Name: "smoke", Script: "tests/smoke.sh", Expect: "PASSED"}
+	def := Definition{Name: "smoke", Checks: []Check{{Script: "tests/smoke.sh", Expect: "PASSED"}}}
 	r := New("r-s2", "smoke", "serial-1", def, dev, &fakeArchiver{}, nil)
 
 	r.RunAll(context.Background())
@@ -259,11 +259,25 @@ func TestRunScriptCaseFails(t *testing.T) {
 func TestRunScriptExitCode(t *testing.T) {
 	dev := connected()
 	dev.scriptBad = true
-	def := Definition{Name: "smoke", Script: "tests/smoke.sh", ExitZero: true}
+	def := Definition{Name: "smoke", Checks: []Check{{Script: "tests/smoke.sh", ExitZero: true}}}
 	r := New("r-s3", "smoke", "serial-1", def, dev, &fakeArchiver{}, nil)
 
 	r.RunAll(context.Background())
 	if r.Snapshot().Status != StatusFailed {
 		t.Fatal("non-zero script exit should fail when exitZero is set")
+	}
+}
+
+func TestCleanOutput(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"a\r\nb", "a\nb"},
+		{"line1\rline2", "line1\nline2"},
+		{"\x1b[32mOK\x1b[0m done", "OK done"},
+		{"tail\n", "tail"},
+	}
+	for _, tc := range cases {
+		if got := cleanOutput(tc.in); got != tc.want {
+			t.Fatalf("cleanOutput(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

@@ -814,7 +814,8 @@ func TestE2ETestScriptDefinition(t *testing.T) {
 	}
 
 	c.send("test.save", map[string]any{"name": "smoke", "definition": map[string]any{
-		"name": "smoke", "script": "tests/smoke.sh", "expect": "PASSED", "exitZero": true, "timeoutMs": 30000,
+		"name":   "smoke",
+		"checks": []any{map[string]any{"script": "tests/smoke.sh", "expect": "PASSED", "exitZero": true, "timeoutMs": 30000}},
 	}})
 	var saved struct {
 		Path string `json:"path"`
@@ -831,7 +832,48 @@ func TestE2ETestScriptDefinition(t *testing.T) {
 		t.Fatalf("decode test.definition: %v", err)
 	}
 	d := loaded.Definition
-	if d.Script != "tests/smoke.sh" || !d.ExitZero || d.TimeoutMS != 30000 || !d.UsesScript() {
+	if len(d.Checks) != 1 || d.Checks[0].Script != "tests/smoke.sh" || !d.Checks[0].ExitZero || d.Checks[0].TimeoutMS != 30000 {
 		t.Fatalf("loaded script definition = %+v", d)
+	}
+}
+
+// TestE2ETestDelete removes a saved definition and an archived run.
+func TestE2ETestDelete(t *testing.T) {
+	_, c := startE2EServer(t)
+
+	c.send("test.save", map[string]any{"name": "tmp", "definition": map[string]any{"name": "tmp", "checks": []any{}}})
+	var saved struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(c.until("test.saved").Payload, &saved); err != nil {
+		t.Fatalf("decode test.saved: %v", err)
+	}
+
+	c.send("test.deleteDef", map[string]any{"path": saved.Path})
+	c.until("test.deleted")
+
+	c.send("test.defs", nil)
+	var defs struct {
+		Definitions []struct {
+			Path string `json:"path"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(c.until("test.defs").Payload, &defs); err != nil {
+		t.Fatalf("decode test.defs: %v", err)
+	}
+	for _, d := range defs.Definitions {
+		if d.Path == saved.Path {
+			t.Fatalf("definition should be gone: %+v", defs.Definitions)
+		}
+	}
+
+	run := testrun.NewRun("run-to-delete", "tmp", "serial-1", testrun.Definition{Name: "tmp"})
+	if _, err := (testrun.Store{}).Archive(run); err != nil {
+		t.Fatal(err)
+	}
+	c.send("test.deleteRun", map[string]any{"runId": "run-to-delete"})
+	c.until("test.deleted")
+	if _, err := (testrun.Store{}).ReadRun("run-to-delete"); err == nil {
+		t.Fatal("run should be deleted")
 	}
 }

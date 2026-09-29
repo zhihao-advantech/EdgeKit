@@ -1372,6 +1372,12 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.tests.handleLoad(c, msg)
 	case "test.open":
 		s.tests.handleOpen(c, msg)
+	case "test.deleteDef":
+		s.tests.handleDeleteDef(c, msg)
+	case "test.deleteRun":
+		s.tests.handleDeleteRun(c, msg)
+	case "test.openDir":
+		s.tests.handleOpenDir(c, msg)
 	case "session.close":
 		s.closeSession(msg.SessionID)
 	case "agent.send":

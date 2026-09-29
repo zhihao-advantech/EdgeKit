@@ -297,17 +297,7 @@
         </div>
         <div class="test-body">
           <div class="test-left">
-            <div class="pane-subtitle">测试用例</div>
-            <div class="test-script-row">
-              <span>脚本</span>
-              <select id="test-script" title="选择 tests/ 下的脚本；选中后运行测试即执行该脚本"></select>
-            </div>
-            <div class="row test-script-opts hidden" id="test-script-opts">
-              <input id="test-script-expect" placeholder="脚本期望输出（正则，可空）">
-              <input id="test-script-timeout" type="number" min="0" step="1000" title="脚本超时(ms)" value="60000">
-              <label class="tcheck-inline"><input type="checkbox" id="test-script-exitzero"> 要求退出码 0</label>
-            </div>
-            <div class="pane-subtitle">检查项（不使用脚本时）</div>
+            <div class="pane-subtitle">检查项（指令或脚本 + 期望）</div>
             <div class="test-checks" id="test-checks"></div>
             <button class="btn small" id="test-add">＋ 添加检查</button>
             <div class="row test-files">

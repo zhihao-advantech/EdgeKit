@@ -232,13 +232,7 @@ func (r *Runner) execConnect(ctx context.Context) {
 
 func (r *Runner) execRun(ctx context.Context) {
 	r.beginPhase(PhaseRun)
-
-	var results []CheckResult
-	if r.run.Definition.UsesScript() {
-		results = []CheckResult{r.runScriptCheck(ctx)}
-	} else {
-		results = r.runChecks(ctx)
-	}
+	results := r.runChecks(ctx)
 
 	failed := 0
 	for _, res := range results {
@@ -265,13 +259,14 @@ func (r *Runner) execRun(ctx context.Context) {
 	r.endPhase(PhaseRun, status, summary, "", "")
 }
 
-// runChecks executes the inline command/expect checks.
+// runChecks executes the case's checks in order. Each check runs a shell command
+// or a workspace script, then applies its expectation / exit-code requirement.
 func (r *Runner) runChecks(ctx context.Context) []CheckResult {
 	checks := r.run.Definition.Checks
 	results := make([]CheckResult, 0, len(checks))
 	for i, c := range checks {
 		if ctx.Err() != nil {
-			results = append(results, CheckResult{Index: i, Name: c.Name, Command: c.Command, Status: CheckSkip, Err: "已中止"})
+			results = append(results, CheckResult{Index: i, Name: c.Name, Command: checkTarget(c), Status: CheckSkip, Err: "已中止"})
 			continue
 		}
 		results = append(results, r.runCheck(ctx, i, c))
@@ -279,83 +274,48 @@ func (r *Runner) runChecks(ctx context.Context) []CheckResult {
 	return results
 }
 
-// runScriptCheck runs the case's workspace script on the device.
-func (r *Runner) runScriptCheck(ctx context.Context) CheckResult {
-	def := r.run.Definition
-	name := path.Base(def.Script)
-	res := CheckResult{Name: name, Command: def.Script, Status: CheckPass}
-
-	timeout := time.Duration(def.TimeoutMS) * time.Millisecond
-	if timeout <= 0 {
-		timeout = 60 * time.Second
+// checkTarget names what a check runs (a script path or a command).
+func checkTarget(c Check) string {
+	if strings.TrimSpace(c.Script) != "" {
+		return c.Script
 	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	out, exitOK, err := r.dev.RunScript(cctx, def.Script)
-	if err != nil {
-		res.Status = CheckFail
-		res.Err = err.Error()
-		res.Output = truncate(out)
-		return res
-	}
-	if def.ExitZero && !exitOK {
-		res.Status = CheckFail
-		res.Err = "脚本返回非零退出码"
-		res.Output = truncate(out)
-		return res
-	}
-	if strings.TrimSpace(def.Expect) != "" {
-		re, err := regexp.Compile(def.Expect)
-		if err != nil {
-			res.Status = CheckFail
-			res.Err = "期望值不是合法正则: " + err.Error()
-			res.Output = truncate(out)
-			return res
-		}
-		if def.ExpectNot {
-			if re.MatchString(out) {
-				res.Status = CheckFail
-				res.Err = "输出不应匹配: " + def.Expect
-				res.Output = truncate(out)
-				return res
-			}
-		} else if !re.MatchString(out) {
-			matched, werr := r.dev.Wait(ctx, def.Expect, timeout)
-			if werr != nil {
-				res.Status = CheckFail
-				res.Err = "未在超时内匹配: " + def.Expect
-				res.Output = truncate(out)
-				return res
-			}
-			out = matched
-		}
-	}
-	res.Output = truncate(out)
-	return res
+	return c.Command
 }
 
 func (r *Runner) runCheck(ctx context.Context, i int, c Check) CheckResult {
-	res := CheckResult{Index: i, Name: c.Name, Command: c.Command, Expect: c.Expect}
+	res := CheckResult{Index: i, Name: c.Name, Command: checkTarget(c), Expect: c.Expect, Status: CheckPass}
+	if res.Name == "" && strings.TrimSpace(c.Script) != "" {
+		res.Name = path.Base(c.Script)
+	}
 	timeout := time.Duration(c.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 
 	var out string
-	if strings.TrimSpace(c.Command) != "" {
-		o, exitOK, err := r.dev.Exec(ctx, c.Command)
+	switch {
+	case strings.TrimSpace(c.Script) != "":
+		cctx, cancel := context.WithTimeout(ctx, timeout)
+		o, exitOK, err := r.dev.RunScript(cctx, c.Script)
+		cancel()
 		out = o
 		if err != nil {
-			res.Status = CheckFail
-			res.Err = err.Error()
-			res.Output = truncate(out)
+			res.Status, res.Err, res.Output = CheckFail, err.Error(), truncate(cleanOutput(out))
 			return res
 		}
 		if c.ExitZero && !exitOK {
-			res.Status = CheckFail
-			res.Err = "命令返回非零退出码"
-			res.Output = truncate(out)
+			res.Status, res.Err, res.Output = CheckFail, "脚本返回非零退出码", truncate(cleanOutput(out))
+			return res
+		}
+	case strings.TrimSpace(c.Command) != "":
+		o, exitOK, err := r.dev.Exec(ctx, c.Command)
+		out = o
+		if err != nil {
+			res.Status, res.Err, res.Output = CheckFail, err.Error(), truncate(cleanOutput(out))
+			return res
+		}
+		if c.ExitZero && !exitOK {
+			res.Status, res.Err, res.Output = CheckFail, "命令返回非零退出码", truncate(cleanOutput(out))
 			return res
 		}
 	}
@@ -363,27 +323,20 @@ func (r *Runner) runCheck(ctx context.Context, i int, c Check) CheckResult {
 	if strings.TrimSpace(c.Expect) != "" {
 		re, err := regexp.Compile(c.Expect)
 		if err != nil {
-			res.Status = CheckFail
-			res.Err = "期望值不是合法正则: " + err.Error()
-			res.Output = truncate(out)
+			res.Status, res.Err, res.Output = CheckFail, "期望值不是合法正则: "+err.Error(), truncate(cleanOutput(out))
 			return res
 		}
 		if c.ExpectNot {
 			if re.MatchString(out) {
-				res.Status = CheckFail
-				res.Err = "输出不应匹配: " + c.Expect
-				res.Output = truncate(out)
+				res.Status, res.Err, res.Output = CheckFail, "输出不应匹配: "+c.Expect, truncate(cleanOutput(out))
 				return res
 			}
-		} else if re.MatchString(out) {
-			// The command's own output already contains the expectation (SSH
-			// exec returns it directly); no need to wait on the timeline.
-		} else {
+		} else if !re.MatchString(out) {
+			// The command's own output missed it; wait on the device timeline
+			// (streaming consoles) before giving up.
 			matched, werr := r.dev.Wait(ctx, c.Expect, timeout)
 			if werr != nil {
-				res.Status = CheckFail
-				res.Err = "未在超时内匹配: " + c.Expect
-				res.Output = truncate(out)
+				res.Status, res.Err, res.Output = CheckFail, "未在超时内匹配: "+c.Expect, truncate(cleanOutput(out))
 				return res
 			}
 			out = matched
@@ -391,9 +344,22 @@ func (r *Runner) runCheck(ctx context.Context, i int, c Check) CheckResult {
 	}
 
 	res.Status = CheckPass
-	res.Output = truncate(out)
+	res.Output = truncate(cleanOutput(out))
 	return res
 }
+
+// cleanOutput makes captured bytes safe to display: ANSI escapes are dropped
+// and carriage returns are folded to newlines (serial consoles often redraw a
+// line with \r, which otherwise looks like garbage).
+func cleanOutput(s string) string {
+	s = ansiRe.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return strings.TrimRight(s, "\n")
+}
+
+// ansiRe matches CSI/OSC escape sequences.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]`)
 
 func (r *Runner) execGenerate(ctx context.Context) {
 	r.beginPhase(PhaseGenerate)

@@ -9,10 +9,7 @@
 // still lands on the device timeline.
 package testrun
 
-import (
-	"strings"
-	"time"
-)
+import "time"
 
 // Phase keys, in pipeline order.
 const (
@@ -43,34 +40,25 @@ const (
 	CheckSkip = "skip"
 )
 
-// Check is one step of a test case: run a command and/or expect output.
+// Check is one step of a test case: it runs a shell command, or a workspace
+// script (Script), and/or expects matching output.
 type Check struct {
 	Name      string `json:"name,omitempty"`
-	Command   string `json:"command,omitempty"`   // run on the target session
-	Expect    string `json:"expect,omitempty"`    // regexp the output must (not) match
-	ExpectNot bool   `json:"expectNot,omitempty"` // invert Expect
+	Command   string `json:"command,omitempty"` // shell command on the target
+	Script    string `json:"script,omitempty"`  // workspace script (tests/*.sh) to run instead
+	Expect    string `json:"expect,omitempty"`  // regexp the output must (not) match
+	ExpectNot bool   `json:"expectNot,omitempty"`
 	ExitZero  bool   `json:"exitZero,omitempty"`  // require a zero exit code
-	TimeoutMS int    `json:"timeoutMs,omitempty"` // wait budget for Expect
+	TimeoutMS int    `json:"timeoutMs,omitempty"` // wait budget
 }
 
 // Definition is a reusable test case. It can be entered by hand in the UI or
-// kept as a file in the workspace (tests/<name>.test.json). A case either runs
-// a workspace script, or the inline checks below.
+// kept as a file in the workspace (tests/<name>.test.json).
 type Definition struct {
-	Name       string `json:"name"`
-	TargetHint string `json:"targetHint,omitempty"`
-	// Script: a workspace script (tests/*.sh) to run on the target. When set,
-	// Checks are ignored; Expect/ExitZero/TimeoutMS apply to its output.
-	Script    string  `json:"script,omitempty"`
-	Expect    string  `json:"expect,omitempty"` // regexp the script output must (not) match
-	ExpectNot bool    `json:"expectNot,omitempty"`
-	ExitZero  bool    `json:"exitZero,omitempty"`  // require a zero exit code
-	TimeoutMS int     `json:"timeoutMs,omitempty"` // script budget in ms
-	Checks    []Check `json:"checks"`
+	Name       string  `json:"name"`
+	TargetHint string  `json:"targetHint,omitempty"`
+	Checks     []Check `json:"checks"`
 }
-
-// UsesScript reports whether the case runs a script instead of inline checks.
-func (d Definition) UsesScript() bool { return strings.TrimSpace(d.Script) != "" }
 
 // CheckResult is one executed check.
 type CheckResult struct {

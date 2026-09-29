@@ -86,11 +86,14 @@ func (k testKit) Tools() []kit.Tool {
 					// run a saved definition
 				case script != "":
 					d := testrun.Definition{
-						Name:      argString(args, "name"),
-						Script:    script,
-						Expect:    argString(args, "expect"),
-						ExitZero:  argBool(args, "exit_zero"),
-						TimeoutMS: argInt(args, "timeout_ms", 60000),
+						Name: argString(args, "name"),
+						Checks: []testrun.Check{{
+							Name:      argString(args, "name"),
+							Script:    script,
+							Expect:    argString(args, "expect"),
+							ExitZero:  argBool(args, "exit_zero"),
+							TimeoutMS: argInt(args, "timeout_ms", 60000),
+						}},
 					}
 					if d.Name == "" {
 						d.Name = script

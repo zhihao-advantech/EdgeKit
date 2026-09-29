@@ -207,3 +207,20 @@ func safeName(s string) string {
 	}
 	return s
 }
+
+// DeleteDefinition removes a saved test case.
+func (Store) DeleteDefinition(rel string) error {
+	rel = path.Clean(rel)
+	if !strings.HasPrefix(rel, "tests/") || !strings.HasSuffix(rel, ".test.json") {
+		return fmt.Errorf("不是有效的测试定义路径: %s", rel)
+	}
+	return workspace.Delete(rel)
+}
+
+// DeleteRun removes an archived run.
+func (Store) DeleteRun(id string) error {
+	if id == "" || strings.ContainsAny(id, `/\`) {
+		return fmt.Errorf("无效的运行 ID: %q", id)
+	}
+	return workspace.Delete(path.Join("tests", "runs", id))
+}
