@@ -104,6 +104,12 @@ openclaw mcp probe edgekit        # 列出可用工具（随设备连接变化�
 
 配置保存在 `~/.config/edgekit/settings.json`（含 API Key，权限 0600）。
 
+### 测试会话
+
+会话列表「测试会话 → ＋」新建：右侧按 **连接 → 运行 → 生成 → 归档** 四步执行，
+用例为「命令 + 期望输出（正则）」，可选超时与退出码要求。结果与 Markdown 报告
+归档到本地工作区 `~/EdgeKit/workspace/tests/runs/<id>/`；失败也会照常出报告并归档。
+
 ### 让 Agent 自己连板调试
 
 见 [`skills/edgekit-board-debug/SKILL.md`](skills/edgekit-board-debug/SKILL.md)；安装为 Agent skill：

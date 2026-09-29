@@ -37,6 +37,7 @@
     <button class="menu-btn">会话</button>
     <div class="dropdown">
       <div class="mi" data-action="new-session">新建会话…</div>
+      <div class="mi" data-action="new-test">新建测试会话</div>
       <div class="sep"></div>
       <div class="mi" data-action="open-agent">打开 Agent 会话</div>
       <div class="mi" data-action="new-desktop">新建桌面会话（VNC）</div>
@@ -120,6 +121,14 @@
         <span class="s-dot" id="sess-agent-dot"></span>
       </li>
     </ul>
+
+    <div class="pane-title">
+      <span>测试会话</span>
+      <button class="iconbtn" id="btn-new-test" title="新建测试会话">
+        <svg viewBox="0 0 16 16"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+      </button>
+    </div>
+    <ul class="session-list" id="test-list"></ul>
 
     <div class="pane-title">
       <span>工作区</span>
@@ -256,6 +265,10 @@
         <span class="tab-accent agent"></span><span class="tab-label" id="tab-agent-label">Agent</span>
         <span class="tab-x" data-close="agent" title="关闭 Agent">×</span>
       </div>
+      <div class="tab hidden" data-session="test" id="tab-test">
+        <span class="tab-accent test"></span><span class="tab-label" id="tab-test-label">测试</span>
+        <span class="tab-x" data-close="test" title="关闭测试">×</span>
+      </div>
       <span class="spacer"></span>
     </div>
 
@@ -268,6 +281,33 @@
           <button class="btn small" id="btn-agent-stop">停止</button>
           <textarea id="agent-input" rows="1" placeholder="描述你的目标，例如：巡检设备状态 / 查看磁盘 / 升级固件…"></textarea>
           <button class="btn primary" id="btn-agent-send">发送</button>
+        </div>
+      </section>
+
+      <!-- 测试会话：连接 → 运行 → 生成 → 归档 -->
+      <section class="view" id="view-test">
+        <div class="test-head">
+          <input id="test-name" class="test-name" placeholder="测试名称" autocomplete="off">
+          <select id="test-target" title="目标设备会话"></select>
+          <span class="spacer"></span>
+          <span class="pill" id="test-status">未开始</span>
+        </div>
+        <div class="test-body">
+          <div class="test-left">
+            <div class="pane-subtitle">测试用例（命令 + 期望）</div>
+            <div class="test-checks" id="test-checks"></div>
+            <button class="btn small" id="test-add">＋ 添加检查</button>
+            <div class="row test-actions">
+              <button class="btn primary" id="test-start">开始测试</button>
+              <button class="btn small" id="test-abort" disabled>中止</button>
+            </div>
+            <div class="hint" id="test-hint">选择目标会话后点「开始测试」，将依次执行 连接 → 运行 → 生成 → 归档。</div>
+          </div>
+          <div class="test-right">
+            <div class="pane-subtitle">执行步骤</div>
+            <ol class="stepper" id="test-stepper"></ol>
+            <div class="test-detail" id="test-detail"></div>
+          </div>
         </div>
       </section>
 

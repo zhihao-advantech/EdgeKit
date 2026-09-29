@@ -336,6 +336,12 @@
       visible: true,
     },
     kits: { kits: [] },
+    // Test sessions (TestRun): connect → run → generate → archive.
+    tests: new Map(),
+    activeTestId: null,
+    testDraft: null,
+    testStep: "connect",
+    testOpen: false,
     // Global terminal display preferences; changed from the settings (gear)
     // menu and persisted until changed again.
     term: { auto: true, ts: true, hex: false, echo: false },
@@ -577,6 +583,7 @@
     for (const ds of state.devices.values()) {
       if (ds.id !== exclude && ds.tabOpen) return ds.id;
     }
+    if (state.testOpen) return "test";
     return state.agentOpen ? "agent" : null;
   }
 
@@ -606,9 +613,15 @@
   function activateSession(id) {
     state.activeTab = id;
     const isAgent = id === "agent";
+    const isTest = id === "test";
     $("tab-agent").classList.toggle("active", isAgent);
     $("sess-agent").classList.toggle("active", isAgent);
     $("view-agent").classList.toggle("active", isAgent);
+    $("tab-test").classList.toggle("active", isTest);
+    $("view-test").classList.toggle("active", isTest);
+    for (const li of document.querySelectorAll("#test-list .session-item")) {
+      li.classList.toggle("active", isTest && li.dataset.test === state.activeTestId);
+    }
     for (const ds of state.devices.values()) {
       const on = ds.id === id;
       ds.tab.classList.toggle("active", on);
@@ -617,10 +630,12 @@
     }
     $("empty-state").classList.remove("show");
     $("settings-agent").classList.toggle("hidden", !isAgent);
-    $("settings-device").classList.toggle("hidden", isAgent);
+    $("settings-device").classList.toggle("hidden", isAgent || isTest);
 
     if (isAgent) {
       $("agent-input").focus();
+    } else if (isTest) {
+      renderTestView();
     } else {
       const ds = state.devices.get(id);
       if (ds) {
@@ -646,6 +661,9 @@
     $("tab-agent").classList.remove("active");
     $("sess-agent").classList.remove("active");
     $("view-agent").classList.remove("active");
+    $("tab-test").classList.remove("active");
+    $("view-test").classList.remove("active");
+    for (const li of document.querySelectorAll("#test-list .session-item")) li.classList.remove("active");
     for (const ds of state.devices.values()) {
       ds.tab.classList.remove("active");
       ds.item.classList.remove("active");
@@ -745,6 +763,8 @@
       case "fs.done": onFSDone(msg.payload || {}); break;
       case "fs.content": onFSContent(msg.payload || {}); break;
       case "timeline.records": onTimelineRecords(msg.payload || {}); break;
+      case "test.created": onTestCreated(msg.payload || {}); break;
+      case "test.state": onTestState(msg.payload || {}); break;
       case "error": onError(msg.payload && msg.payload.message); break;
       default: break;
     }
@@ -1590,11 +1610,261 @@
   };
 
   /* ------------------------------------------------------------------ *
+   * test sessions (TestRun): connect → run → generate → archive
+   * ------------------------------------------------------------------ */
+  const TEST_PHASES = [
+    { key: "connect", label: "连接", hint: "校验目标会话" },
+    { key: "run", label: "运行", hint: "执行检查项" },
+    { key: "generate", label: "生成", hint: "汇总测试报告" },
+    { key: "archive", label: "归档", hint: "写入本地工作区" },
+  ];
+  const TEST_SVG = '<svg viewBox="0 0 16 16"><path d="M6 2h6.5a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V6z"/><path d="M6 2v3.5H3"/><path d="M5.4 9.2l1.4 1.4 2.8-3"/></svg>';
+
+  function blankCheck() {
+    return { name: "", command: "", expect: "", expectNot: false, exitZero: false, timeoutMs: 10000 };
+  }
+  function newTest() {
+    state.testDraft = { name: "测试", checks: [blankCheck()] };
+    state.activeTestId = null;
+    state.testStep = "connect";
+    openTestView();
+  }
+  function openTestView() {
+    state.testOpen = true;
+    $("tab-test").classList.remove("hidden");
+    activateSession("test");
+  }
+  function closeTestTab() {
+    state.testOpen = false;
+    $("tab-test").classList.add("hidden");
+    if (state.activeTab !== "test") return;
+    const next = state.focusDevice || (state.devices.size ? state.devices.keys().next().value : null);
+    if (next) activateSession(next);
+    else if (state.agentOpen) activateSession("agent");
+    else showEmpty();
+  }
+  function activeTestRun() {
+    return state.activeTestId ? state.tests.get(state.activeTestId) : null;
+  }
+  function testFinished(run) {
+    const p = (run.phases || []).find((x) => x.key === "archive");
+    return !!p && ["passed", "failed", "skipped", "aborted"].includes(p.status);
+  }
+  function runStatusLabel(run) {
+    if (!run) return "未开始";
+    switch (run.status) {
+      case "passed": return "通过";
+      case "failed": return "失败";
+      case "aborted": return "已中止";
+      case "running": return "进行中…";
+      default: return "未开始";
+    }
+  }
+  function draftToDef() {
+    const d = state.testDraft || { name: "测试", checks: [] };
+    return {
+      name: (d.name || "测试").trim() || "测试",
+      checks: (d.checks || []).map((c) => ({
+        name: c.name || "",
+        command: c.command || "",
+        expect: c.expect || "",
+        expectNot: !!c.expectNot,
+        exitZero: !!c.exitZero,
+        timeoutMs: Number(c.timeoutMs) || 0,
+      })),
+    };
+  }
+  function defToDraft(def) {
+    return {
+      name: (def && def.name) || "测试",
+      checks: ((def && def.checks) || []).map((c) => ({
+        name: c.name || "", command: c.command || "", expect: c.expect || "",
+        expectNot: !!c.expectNot, exitZero: !!c.exitZero, timeoutMs: c.timeoutMs || 10000,
+      })),
+    };
+  }
+  function onTestCreated(payload) {
+    const id = payload && payload.runId;
+    if (!id) return;
+    state.activeTestId = id;
+    state.testStep = "connect";
+    openTestView();
+    send("test.phase", { runId: id, phase: "all" });
+  }
+  function onTestState(run) {
+    if (!run || !run.id) return;
+    state.tests.set(run.id, run);
+    renderTestList();
+    if (state.activeTestId === run.id && state.activeTab === "test") renderTestView();
+    updatePill();
+  }
+  function renderTestList() {
+    const ul = $("test-list");
+    if (!ul) return;
+    ul.textContent = "";
+    for (const run of state.tests.values()) {
+      const li = document.createElement("li");
+      li.className = "session-item" + (run.id === state.activeTestId ? " active" : "");
+      li.dataset.test = run.id;
+      const dot = run.status === "passed" ? "on" : (run.status === "failed" ? "err" : "");
+      li.innerHTML = `<span class="s-ico test">${TEST_SVG}</span>
+        <span class="s-info"><b>${esc(run.name || "测试")}</b><small>${esc(runStatusLabel(run))}</small></span>
+        <span class="s-dot ${dot}"></span>`;
+      li.addEventListener("click", () => selectTestRun(run.id));
+      ul.appendChild(li);
+    }
+  }
+  function selectTestRun(id) {
+    state.activeTestId = id;
+    const run = state.tests.get(id);
+    if (run) state.testDraft = defToDraft(run.definition);
+    state.testStep = "run";
+    openTestView();
+  }
+  function renderTestView() {
+    if (!state.testDraft) state.testDraft = { name: "测试", checks: [blankCheck()] };
+    const run = activeTestRun();
+    $("test-name").value = state.testDraft.name || "";
+    $("tab-test-label").textContent = "测试 · " + (state.testDraft.name || "测试");
+
+    const sel = $("test-target");
+    sel.textContent = "";
+    for (const ds of state.devices.values()) {
+      const o = document.createElement("option");
+      o.value = ds.id;
+      o.textContent = (ds.kind === "serial" ? "串口 · " : ds.kind === "ssh" ? "SSH · " : "桌面 · ") + shortPort(ds.label);
+      sel.appendChild(o);
+    }
+    if (!state.devices.size) {
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "（无设备会话）";
+      sel.appendChild(o);
+    }
+    const target = (run && run.sessionId) || state.focusDevice || (state.devices.size ? state.devices.keys().next().value : "");
+    if (target) sel.value = target;
+
+    $("test-status").textContent = runStatusLabel(run);
+    $("test-status").className = "pill" + (run && run.status === "passed" ? " ok" : "");
+    $("test-start").textContent = run && testFinished(run) ? "再次运行" : "开始测试";
+    $("test-abort").disabled = !(run && !testFinished(run));
+    renderChecks();
+    renderStepper(run);
+    renderTestDetail(run);
+  }
+  function renderChecks() {
+    const box = $("test-checks");
+    box.textContent = "";
+    (state.testDraft.checks || []).forEach((c, i) => {
+      const row = document.createElement("div");
+      row.className = "check-row";
+      row.innerHTML = `
+        <input class="ci-name" placeholder="名称" value="${esc(c.name || "")}">
+        <input class="ci-cmd" placeholder="命令（可空，仅等输出）" value="${esc(c.command || "")}">
+        <input class="ci-exp" placeholder="期望输出（正则）" value="${esc(c.expect || "")}">
+        <input class="ci-to" type="number" min="0" step="500" title="期望超时(ms)" value="${esc(String(c.timeoutMs || 10000))}">
+        <label class="ci-chk" title="要求退出码为 0"><input type="checkbox" ${c.exitZero ? "checked" : ""}>0</label>
+        <label class="ci-chk" title="期望不匹配"><input type="checkbox" ${c.expectNot ? "checked" : ""}>非</label>
+        <button class="iconbtn danger ci-del" title="删除">×</button>`;
+      const boxes = row.querySelectorAll("input[type=checkbox]");
+      const upd = () => {
+        c.name = row.querySelector(".ci-name").value;
+        c.command = row.querySelector(".ci-cmd").value;
+        c.expect = row.querySelector(".ci-exp").value;
+        c.timeoutMs = Number(row.querySelector(".ci-to").value) || 0;
+        c.exitZero = boxes[0].checked;
+        c.expectNot = boxes[1].checked;
+      };
+      row.querySelectorAll("input").forEach((el) => el.addEventListener("change", upd));
+      row.querySelector(".ci-del").addEventListener("click", () => {
+        state.testDraft.checks.splice(i, 1);
+        renderChecks();
+      });
+      box.appendChild(row);
+    });
+  }
+  function renderStepper(run) {
+    const ol = $("test-stepper");
+    ol.textContent = "";
+    for (const ph of TEST_PHASES) {
+      const ps = run ? (run.phases || []).find((p) => p.key === ph.key) : null;
+      const status = ps ? ps.status : "pending";
+      const li = document.createElement("li");
+      li.className = "step " + status + (state.testStep === ph.key ? " active" : "");
+      const summary = ps && ps.summary ? ps.summary : ph.hint;
+      const runBtn = run && status === "pending" ? `<button class="btn small step-run">执行</button>` : "";
+      li.innerHTML = `<span class="step-dot"></span>
+        <span class="step-main"><b>${esc(ph.label)}</b><small>${esc(summary)}</small></span>${runBtn}`;
+      li.addEventListener("click", (e) => {
+        state.testStep = ph.key;
+        renderStepper(run);
+        renderTestDetail(run);
+        if (e.target.classList.contains("step-run")) send("test.phase", { runId: run.id, phase: ph.key });
+      });
+      ol.appendChild(li);
+    }
+  }
+  function renderTestDetail(run) {
+    const box = $("test-detail");
+    if (!run) {
+      box.innerHTML = '<p class="muted">尚无运行记录。填写检查项后点「开始测试」。</p>';
+      return;
+    }
+    const ph = (run.phases || []).find((p) => p.key === state.testStep);
+    if (!ph) { box.textContent = ""; return; }
+    const label = (TEST_PHASES.find((x) => x.key === ph.key) || {}).label || ph.key;
+    let h = `<div class="td-head"><b>${esc(label)}</b> <span class="muted">${esc(ph.summary || ph.status)}</span></div>`;
+    if (ph.key === "run" && ph.checks && ph.checks.length) {
+      h += '<table class="check-table"><thead><tr><th>#</th><th>检查</th><th>命令</th><th>结果</th></tr></thead><tbody>';
+      for (const c of ph.checks) {
+        h += `<tr class="${c.status === "fail" ? "bad" : ""}"><td>${c.index + 1}</td><td>${esc(c.name || "")}</td>` +
+          `<td><code>${esc(c.command || "—")}</code></td>` +
+          `<td>${esc(checkLabel(c.status))}${c.err ? " · " + esc(c.err) : ""}</td></tr>`;
+      }
+      h += "</tbody></table>";
+      const shown = ph.checks.find((c) => c.status === "fail") || ph.checks[ph.checks.length - 1];
+      if (shown && shown.output) h += `<pre class="test-out">${esc(shown.output)}</pre>`;
+    } else if (ph.output) {
+      h += `<pre class="test-out">${esc(ph.output)}</pre>`;
+    }
+    if (run.archivedPath) h += `<p class="muted">归档：<code>${esc(run.archivedPath)}</code></p>`;
+    box.innerHTML = h;
+  }
+  function checkLabel(status) {
+    return status === "pass" ? "通过" : status === "fail" ? "失败" : status === "skip" ? "跳过" : status;
+  }
+  function startTest() {
+    const def = draftToDef();
+    if (!def.checks.length) { toast("请至少添加一条检查"); return; }
+    const sid = $("test-target").value;
+    if (!sid) { toast("请先选择目标设备会话"); return; }
+    send("test.new", { name: def.name, sessionId: sid, definition: def });
+  }
+  function abortTest() {
+    if (state.activeTestId) send("test.abort", { runId: state.activeTestId });
+  }
+  function setupTest() {
+    $("btn-new-test").addEventListener("click", newTest);
+    $("tab-test").addEventListener("click", () => { if (state.testOpen) activateSession("test"); });
+    $("tab-test").querySelector(".tab-x").addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeTestTab();
+    });
+    $("test-name").addEventListener("change", () => {
+      if (state.testDraft) state.testDraft.name = $("test-name").value;
+      $("tab-test-label").textContent = "测试 · " + ($("test-name").value || "测试");
+    });
+    $("test-add").addEventListener("click", () => { state.testDraft.checks.push(blankCheck()); renderChecks(); });
+    $("test-start").addEventListener("click", startTest);
+    $("test-abort").addEventListener("click", abortTest);
+  }
+
+  /* ------------------------------------------------------------------ *
    * menus / toolbar
    * ------------------------------------------------------------------ */
   function syncToolbar() {
     // Terminal view toggles (自动滚动 / 时间戳 / HEX / 本地回显) live in the
-    // 终端 menu; their check state is refreshed by updateMenuState().
+    // settings (gear) menu; their check state is refreshed by updateMenuState().
     updatePill();
     updateMenuState();
   }
@@ -1608,6 +1878,10 @@
       const target = state.agent.target === "local" ? "Local" : "Remote";
       text = `Agent · ${mode} · ${target}`;
       ok = state.agent.mode === "ai";
+    } else if (state.activeTab === "test") {
+      const run = activeTestRun();
+      text = "测试 · " + (run ? (run.name || "测试") + " · " + runStatusLabel(run) : "未开始");
+      ok = !!run && run.status === "passed";
     } else if (ds) {
       text = (ds.kind === "serial" ? "串口" : "SSH") + " · " + shortPort(ds.label) + (ds.connected ? "" : " · 未连接");
       ok = ds.connected;
@@ -1679,6 +1953,7 @@
     const cv = ds ? ds.console : null;
     switch (action) {
       case "new-session": showNewSession("serial"); break;
+      case "new-test": newTest(); break;
       case "open-agent": openAgentTab(); break;
       case "new-desktop": showNewSession("desktop"); break;
       case "close-current":
@@ -2158,6 +2433,7 @@
   setupNewSession();
   setupWorkspace();
   setupAgent();
+  setupTest();
   wirePersist();
   setFont(1);
   setNewKind("serial");

@@ -122,6 +122,15 @@ openclaw mcp probe edgekit        # lists the tools (varies with connected devic
 Settings live in `~/.config/edgekit/settings.json` (contains the API key,
 mode 0600).
 
+### Test sessions
+
+Create one from "Test sessions → +" in the session list: the right pane drives
+four steps, **connect → run → generate → archive**. A case is a list of commands
+with expected output (regexp), an optional timeout and exit-code check. Results
+and a Markdown report are archived under
+`~/EdgeKit/workspace/tests/runs/<id>/`; a failed run is still reported and
+archived.
+
 ### Let an agent debug boards itself
 
 See [`skills/edgekit-board-debug/SKILL.md`](skills/edgekit-board-debug/SKILL.md);

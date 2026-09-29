@@ -78,6 +78,8 @@ func (m *testManager) handleNew(c *client, msg message) {
 	m.runs[id] = runner
 	m.mu.Unlock()
 
+	// Tell the caller which run it just created, then publish the initial state.
+	m.s.sendTo(c, "test.created", map[string]any{"runId": id})
 	m.onUpdate(runner.Snapshot())
 }
 
