@@ -499,7 +499,8 @@ func (m *testManager) handleDeleteDef(c *client, msg message) {
 	m.broadcastDefs()
 }
 
-// handleDeleteRun removes an archived run.
+// handleDeleteRun removes an archived run (and stops it first if it is still
+// running). It also drops the run from the live set so the UI list loses it.
 func (m *testManager) handleDeleteRun(c *client, msg message) {
 	var p struct {
 		RunID string `json:"runId"`
@@ -508,6 +509,11 @@ func (m *testManager) handleDeleteRun(c *client, msg message) {
 		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
 		return
 	}
+	if runner := m.runner(p.RunID); runner != nil {
+		runner.Abort()
+	}
+	// RemoveAll on a missing directory is a no-op, so a run that never archived
+	// is deleted too.
 	if err := (testrun.Store{}).DeleteRun(p.RunID); err != nil {
 		m.s.sendError(c, err)
 		return

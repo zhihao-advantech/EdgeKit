@@ -267,7 +267,7 @@
       </div>
       <div class="tab hidden" data-session="test" id="tab-test">
         <span class="tab-accent test"></span><span class="tab-label" id="tab-test-label">测试</span>
-        <span class="tab-x" data-close="test" title="关闭测试">×</span>
+        <span class="tab-x" data-close="test" title="关闭测试视图（保留运行记录，删除请用视图内的「删除」）">×</span>
       </div>
       <span class="spacer"></span>
       <button class="tab tab-new" id="tab-new-test" title="打开测试会话">
@@ -307,6 +307,7 @@
             <div class="row test-actions">
               <button class="btn primary" id="test-start">开始测试</button>
               <button class="btn small" id="test-abort" disabled>中止</button>
+              <button class="btn small" id="test-delete" disabled title="删除这个测试运行（中止并移除记录）">删除</button>
             </div>
             <div class="hint" id="test-hint">选择目标会话后点「开始测试」，将依次执行 连接 → 运行 → 生成 → 归档。</div>
           </div>

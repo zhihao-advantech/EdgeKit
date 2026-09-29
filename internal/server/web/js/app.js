@@ -772,7 +772,7 @@
         break;
       }
       case "test.defs": onTestDefs(msg.payload || {}); break;
-      case "test.deleted": toast("已删除"); break;
+      case "test.deleted": onTestDeleted(msg.payload || {}); break;
       case "test.definition": onTestDefinition(msg.payload || {}); break;
       case "test.saved":
         toast("已保存到工作区：" + ((msg.payload && msg.payload.path) || ""));
@@ -1852,6 +1852,7 @@
     $("test-status").className = "pill" + (run && run.status === "passed" ? " ok" : "");
     $("test-start").textContent = run && testFinished(run) ? "再次运行" : "开始测试";
     $("test-abort").disabled = !(run && !testFinished(run));
+    $("test-delete").disabled = !run;
 
     renderChecks();
     renderStepper(run);
@@ -1991,6 +1992,25 @@
   function abortTest() {
     if (state.activeTestId) send("test.abort", { runId: state.activeTestId });
   }
+  // Delete the open test session: stops it if running, removes the run from the
+  // list and clears the view (the definition stays in the editor).
+  function deleteTest() {
+    if (!state.activeTestId) { toast("没有可删除的测试运行"); return; }
+    send("test.deleteRun", { runId: state.activeTestId });
+  }
+  function onTestDeleted(p) {
+    if (p.runId) {
+      state.tests.delete(p.runId);
+      if (state.activeTestId === p.runId) {
+        state.activeTestId = null;
+        state.testStep = "connect";
+      }
+      renderTestList();
+      if (state.activeTab === "test") renderTestView();
+      updatePill();
+    }
+    toast("已删除");
+  }
   function setupTest() {
     $("btn-new-test").addEventListener("click", newTest);
     $("tab-new-test").addEventListener("click", openTestSession);
@@ -2008,6 +2028,7 @@
     $("test-save").addEventListener("click", saveDefinition);
     $("test-start").addEventListener("click", startTest);
     $("test-abort").addEventListener("click", abortTest);
+    $("test-delete").addEventListener("click", deleteTest);
   }
 
   /* ------------------------------------------------------------------ *

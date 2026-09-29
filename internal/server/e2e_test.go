@@ -877,3 +877,40 @@ func TestE2ETestDelete(t *testing.T) {
 		t.Fatal("run should be deleted")
 	}
 }
+
+// TestE2ETestDeleteLiveRun deletes a run that exists only in memory (created but
+// never archived), which is what "delete the open test session" uses.
+func TestE2ETestDeleteLiveRun(t *testing.T) {
+	edge, _ := startVirtualSerialPair(t)
+	_, c := startE2EServer(t)
+	id := c.openSerial(t, edge)
+
+	c.send("test.new", map[string]any{"name": "live", "sessionId": id, "definition": map[string]any{
+		"name": "live", "checks": []any{map[string]any{"command": "true"}},
+	}})
+	var created struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.Unmarshal(c.until("test.created").Payload, &created); err != nil {
+		t.Fatalf("decode test.created: %v", err)
+	}
+	// consume the initial test.state so it is not mistaken for a later one
+	var initial testrun.Run
+	if err := json.Unmarshal(c.until("test.state").Payload, &initial); err != nil {
+		t.Fatalf("decode test.state: %v", err)
+	}
+
+	c.send("test.deleteRun", map[string]any{"runId": created.RunID})
+	var deleted struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.Unmarshal(c.until("test.deleted").Payload, &deleted); err != nil {
+		t.Fatalf("decode test.deleted: %v", err)
+	}
+	if deleted.RunID != created.RunID {
+		t.Fatalf("deleted %q, want %q", deleted.RunID, created.RunID)
+	}
+	if _, err := (testrun.Store{}).ReadRun(created.RunID); err == nil {
+		t.Fatal("live run should no longer be readable")
+	}
+}
