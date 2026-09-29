@@ -94,7 +94,7 @@ func (k codeEditKit) Tools() []kit.Tool {
 			Name:        "code_deploy",
 			Description: "推送本地工作区文件到板端（SFTP）",
 			Risk:        kit.RiskMutate,
-			Schema: deviceObj(map[string]any{
+			Schema: deviceSchema(map[string]any{
 				"path":   strType(),
 				"target": strType(),
 			}, "path", "target"),
@@ -121,7 +121,7 @@ func (k codeEditKit) Tools() []kit.Tool {
 			Name:        "code_run",
 			Description: "在板端运行命令并返回结构化结果（exit code + output + timing）",
 			Risk:        kit.RiskMutate,
-			Schema: deviceObj(map[string]any{
+			Schema: deviceSchema(map[string]any{
 				"command": strType(),
 			}, "command"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {

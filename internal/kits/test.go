@@ -63,7 +63,7 @@ func (k testKit) Tools() []kit.Tool {
 				"用 path 指定工作区里已保存的定义，用 script 运行工作区脚本（tests/*.sh），" +
 				"或用 command/expect 直接给一次性检查；返回结论、逐项结果与归档路径。",
 			Risk: kit.RiskMutate,
-			Schema: deviceObj(map[string]any{
+			Schema: deviceSchema(map[string]any{
 				"path":       strType(),
 				"script":     strType(),
 				"name":       strType(),

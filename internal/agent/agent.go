@@ -349,9 +349,12 @@ func (m *Manager) runTool(ctx context.Context, name string, args map[string]any,
 	argText := marshalArgs(args)
 
 	// A `session` argument targets a specific device; carry it so the audit
-	// record and the capability calls both land on that session.
-	if id, _ := args["session"].(string); id != "" {
-		ctx = kit.WithSession(ctx, id)
+	// record and the capability calls both land on that session. Only device
+	// tools (which declare the argument) are routed.
+	if t.DeclaresSession() {
+		if id, _ := args[kit.SessionArg].(string); id != "" {
+			ctx = kit.WithSession(ctx, id)
+		}
 	}
 
 	// The tool contract is checked before the approval gate, so a mutating

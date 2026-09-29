@@ -43,6 +43,26 @@ type Tool struct {
 // Mutating reports whether the tool changes device or host state.
 func (t Tool) Mutating() bool { return t.Risk != RiskRead }
 
+// SessionArg is the shared argument that routes a device tool call to a specific
+// device session. It is not special on its own: a tool participates in routing
+// only when its schema declares this property (see DeclaresSession), so
+// non-device and external tools are unaffected by a stray "session" key.
+const SessionArg = "session"
+
+// DeclaresSession reports whether the tool's schema exposes the session
+// argument, i.e. it is a device tool that can target a specific session.
+func (t Tool) DeclaresSession() bool {
+	if t.Schema == nil {
+		return false
+	}
+	props, _ := t.Schema["properties"].(map[string]any)
+	if props == nil {
+		return false
+	}
+	_, ok := props[SessionArg]
+	return ok
+}
+
 // DefaultCallTimeout bounds a single tool call at the host's call sites. Long
 // but legitimate operations (builds, flashing) still fit; a hung tool cannot
 // stall an agent turn or an MCP client forever.
@@ -61,9 +81,11 @@ type callResult struct {
 // the call by ctx alone.
 func (t Tool) Invoke(ctx context.Context, args map[string]any, timeout time.Duration) (string, error) {
 	// A shared `session` argument routes the call to a specific device session;
-	// without it the capabilities resolve the focused one.
-	if id, _ := args["session"].(string); id != "" {
-		ctx = WithSession(ctx, id)
+	// only tools that declare it are routed, so external tools are unaffected.
+	if t.DeclaresSession() {
+		if id, _ := args[SessionArg].(string); id != "" {
+			ctx = WithSession(ctx, id)
+		}
 	}
 	if timeout > 0 {
 		var cancel context.CancelFunc

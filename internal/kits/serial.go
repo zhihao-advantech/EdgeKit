@@ -43,7 +43,7 @@ func (k serialKit) Tools() []kit.Tool {
 			Name:        "serial_read",
 			Description: "读取串口最近接收到的数据（文本）",
 			Risk:        kit.RiskRead,
-			Schema:      deviceObj(nil),
+			Schema:      deviceSchema(nil),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsOpen() {
 					return "", fmt.Errorf("串口未打开")
@@ -62,7 +62,7 @@ func (k serialKit) Tools() []kit.Tool {
 			Name:        "serial_write",
 			Description: "向串口发送数据（会自动追加换行）",
 			Risk:        kit.RiskMutate,
-			Schema:      deviceObj(map[string]any{"data": strType()}, "data"),
+			Schema:      deviceSchema(map[string]any{"data": strType()}, "data"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsOpen() {
 					return "", fmt.Errorf("串口未打开")
@@ -81,7 +81,7 @@ func (k serialKit) Tools() []kit.Tool {
 			Name:        "serial_exec",
 			Description: "通过串口向设备发送命令并抓取回显（需要设备侧有 shell，串口已打开）",
 			Risk:        kit.RiskMutate,
-			Schema:      deviceObj(map[string]any{"command": strType()}, "command"),
+			Schema:      deviceSchema(map[string]any{"command": strType()}, "command"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsOpen() {
 					return "", fmt.Errorf("串口未打开")

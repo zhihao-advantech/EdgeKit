@@ -76,7 +76,8 @@ func TestInvokePropagatesToolError(t *testing.T) {
 func TestInvokeCarriesSessionArgument(t *testing.T) {
 	var got string
 	tool := Tool{
-		Name: "t",
+		Name:   "t",
+		Schema: map[string]any{"type": "object", "properties": map[string]any{SessionArg: map[string]any{"type": "string"}}},
 		Call: func(ctx context.Context, args map[string]any) (string, error) {
 			got = SessionFrom(ctx)
 			return "ok", nil
@@ -97,5 +98,29 @@ func TestInvokeCarriesSessionArgument(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("session = %q, want empty (focused)", got)
+	}
+}
+
+// TestInvokeIgnoresSessionWhenNotDeclared guards the convergence rule: a tool
+// that does not declare `session` in its schema is never routed by it, so
+// external tools cannot be redirected by a stray argument.
+func TestInvokeIgnoresSessionWhenNotDeclared(t *testing.T) {
+	var got string
+	tool := Tool{
+		Name:   "ext",
+		Schema: map[string]any{"type": "object", "properties": map[string]any{"q": map[string]any{"type": "string"}}},
+		Call: func(ctx context.Context, args map[string]any) (string, error) {
+			got = SessionFrom(ctx)
+			return "ok", nil
+		},
+	}
+	if _, err := tool.Invoke(context.Background(), map[string]any{"session": "serial-2"}, time.Minute); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("undeclared session must not route, got %q", got)
+	}
+	if tool.DeclaresSession() {
+		t.Fatal("tool without the session property must not declare it")
 	}
 }

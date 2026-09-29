@@ -46,7 +46,7 @@ func (k timelineKit) Tools() []kit.Tool {
 				" 条记录（lookback 可调），因此两次调用之间到达的输出不会错过；" +
 				"超时返回最近几条记录以便判断设备状态。",
 			Risk: kit.RiskRead,
-			Schema: deviceObj(map[string]any{
+			Schema: deviceSchema(map[string]any{
 				"pattern":    strType(),
 				"channel":    strType(),
 				"kind":       strType(),

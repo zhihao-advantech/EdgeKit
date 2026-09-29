@@ -43,7 +43,7 @@ func (k sftpKit) Tools() []kit.Tool {
 			Name:        "sftp_list",
 			Description: "列出 SFTP 远端目录内容",
 			Risk:        kit.RiskRead,
-			Schema:      deviceObj(map[string]any{"path": strType()}, "path"),
+			Schema:      deviceSchema(map[string]any{"path": strType()}, "path"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsConnected() {
 					return "", fmt.Errorf("SFTP 未连接")
@@ -67,7 +67,7 @@ func (k sftpKit) Tools() []kit.Tool {
 			Name:        "sftp_download",
 			Description: "把远端文件下载到本地工作区，返回本地路径",
 			Risk:        kit.RiskMutate,
-			Schema:      deviceObj(map[string]any{"path": strType()}, "path"),
+			Schema:      deviceSchema(map[string]any{"path": strType()}, "path"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsConnected() {
 					return "", fmt.Errorf("SFTP 未就绪（请先连接 SSH）")
@@ -88,7 +88,7 @@ func (k sftpKit) Tools() []kit.Tool {
 			Name:        "sftp_upload",
 			Description: "把文本内容写入 SFTP 远端文件",
 			Risk:        kit.RiskMutate,
-			Schema:      deviceObj(map[string]any{"path": strType(), "content": strType()}, "path", "content"),
+			Schema:      deviceSchema(map[string]any{"path": strType(), "content": strType()}, "path", "content"),
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
 				if k.s == nil || !k.s.IsConnected() {
 					return "", fmt.Errorf("SFTP 未连接")
