@@ -150,6 +150,7 @@ func (m *connectorManager) connect(id string) {
 		m.mu.Unlock()
 		m.s.kits.Remove("edgekit.connector." + id)
 		m.broadcastConnectors()
+		m.s.notifyToolsChanged()
 		return
 	}
 
@@ -178,6 +179,7 @@ func (m *connectorManager) connect(id string) {
 
 	m.s.broadcast("kits", m.s.kitsPayload())
 	m.broadcastConnectors()
+	m.s.notifyToolsChanged()
 	go m.supervise(id, st, gen, cli)
 }
 
@@ -196,6 +198,7 @@ func (m *connectorManager) supervise(id string, st *connectorState, gen int, cli
 		m.s.kits.Remove("edgekit.connector." + id)
 		m.s.broadcast("kits", m.s.kitsPayload())
 		m.broadcastConnectors()
+		m.s.notifyToolsChanged()
 	}
 }
 
@@ -221,6 +224,7 @@ func (m *connectorManager) disconnect(id string) {
 	m.s.kits.Remove("edgekit.connector." + id)
 	m.s.broadcast("kits", m.s.kitsPayload())
 	m.broadcastConnectors()
+	m.s.notifyToolsChanged()
 }
 
 // shutdown stops every connector (called on server Close).

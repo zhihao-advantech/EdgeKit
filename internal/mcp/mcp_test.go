@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 	"testing"
@@ -104,5 +105,44 @@ func TestUnknownMethodReturnsRPCError(t *testing.T) {
 	}
 	if errObj["code"].(float64) != -32601 {
 		t.Fatalf("code = %v", errObj["code"])
+	}
+}
+
+// notifierBackend adds the optional change channel to the fake backend.
+type notifierBackend struct {
+	fakeBackend
+	ch chan struct{}
+}
+
+func (n notifierBackend) Changes() <-chan struct{} { return n.ch }
+
+func TestToolsListChangedNotification(t *testing.T) {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	ch := make(chan struct{}, 1)
+	go func() { _ = Serve(context.Background(), inR, outW, notifierBackend{fakeBackend{}, ch}, "edgekit", "t") }()
+	defer inW.Close()
+	defer outW.Close()
+
+	dec := json.NewDecoder(outR)
+	if _, err := inW.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	var init map[string]any
+	if err := dec.Decode(&init); err != nil {
+		t.Fatalf("decode initialize: %v", err)
+	}
+	caps := init["result"].(map[string]any)["capabilities"].(map[string]any)["tools"].(map[string]any)
+	if caps["listChanged"] != true {
+		t.Fatalf("listChanged not advertised: %v", caps)
+	}
+
+	ch <- struct{}{}
+	var note map[string]any
+	if err := dec.Decode(&note); err != nil {
+		t.Fatalf("decode notification: %v", err)
+	}
+	if note["method"] != "notifications/tools/list_changed" {
+		t.Fatalf("unexpected notification: %v", note)
 	}
 }

@@ -33,6 +33,17 @@ type Backend interface {
 	Call(ctx context.Context, name string, args map[string]any) (string, error)
 }
 
+// ChangeNotifier is an optional Backend capability: when implemented, the
+// server emits notifications/tools/list_changed each time the channel fires,
+// so a connected client refreshes its tool list after kits activate or an
+// external connector attaches.
+type ChangeNotifier interface {
+	Changes() <-chan struct{}
+}
+
+// Notification method names.
+const notifyToolsChanged = "notifications/tools/list_changed"
+
 type request struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -72,6 +83,32 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, backend Backend, na
 		write(response{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: msg}})
 	}
 
+	// Advertise tools/list_changed and push it when the backend says the tool
+	// surface changed.
+	listChanged := false
+	var changes <-chan struct{}
+	if n, ok := backend.(ChangeNotifier); ok {
+		listChanged = true
+		changes = n.Changes()
+	}
+	notifyDone := make(chan struct{})
+	defer close(notifyDone)
+	if listChanged {
+		go func() {
+			for {
+				select {
+				case <-notifyDone:
+					return
+				case _, ok := <-changes:
+					if !ok {
+						return
+					}
+					write(map[string]any{"jsonrpc": "2.0", "method": notifyToolsChanged})
+				}
+			}
+		}()
+	}
+
 	for {
 		var req request
 		if err := dec.Decode(&req); err != nil {
@@ -93,7 +130,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, backend Backend, na
 			case "initialize":
 				reply(r.ID, map[string]any{
 					"protocolVersion": ProtocolVersion,
-					"capabilities":    map[string]any{"tools": map[string]any{}},
+					"capabilities":    map[string]any{"tools": map[string]any{"listChanged": listChanged}},
 					"serverInfo":      map[string]any{"name": name, "version": version},
 				})
 			case "ping":

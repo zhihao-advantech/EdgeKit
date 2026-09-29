@@ -380,8 +380,20 @@ func (s *Server) updateDeviceEvents() {
 		}
 	}
 	s.mu.Unlock()
-	s.kits.SetEvent(kit.DeviceKindEvent("serial"), serialActive)
-	s.kits.SetEvent(kit.DeviceKindEvent("ssh"), sshActive)
+	serialEvent := kit.DeviceKindEvent("serial")
+	sshEvent := kit.DeviceKindEvent("ssh")
+	prev := s.kits.Events()
+	s.kits.SetEvent(serialEvent, serialActive)
+	s.kits.SetEvent(sshEvent, sshActive)
+	if prev[serialEvent] != serialActive || prev[sshEvent] != sshActive {
+		s.notifyToolsChanged()
+	}
+}
+
+// notifyToolsChanged tells every client (and, through the stdio MCP bridge,
+// every external MCP client) that the advertised tool list may have changed.
+func (s *Server) notifyToolsChanged() {
+	s.broadcast("tools.changed", map[string]any{})
 }
 
 // markDisconnected clears a session's connection flag when its transport really
@@ -1348,6 +1360,7 @@ func (s *Server) handleKitsSetEnabled(c *client, msg message) {
 	}
 	s.persistKits()
 	s.broadcast("kits", s.kitsPayload())
+	s.notifyToolsChanged()
 }
 
 // persistKits remembers which kits are disabled.

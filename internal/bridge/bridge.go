@@ -42,11 +42,25 @@ type Bridge struct {
 	mu      sync.Mutex
 	waiters []*waiter
 	seq     int
+
+	// changed is signalled when the app reports that the tool surface changed
+	// (a kit activated, a connector attached), so an MCP client can refresh.
+	changed chan struct{}
 }
 
 // New creates a bridge over an established connection.
 func New(conn *websocket.Conn) *Bridge {
-	return &Bridge{conn: conn}
+	return &Bridge{conn: conn, changed: make(chan struct{}, 1)}
+}
+
+// Changes implements mcp.ChangeNotifier.
+func (b *Bridge) Changes() <-chan struct{} { return b.changed }
+
+func (b *Bridge) signalChanged() {
+	select {
+	case b.changed <- struct{}{}:
+	default:
+	}
 }
 
 // Run reads replies until the connection closes; start it in its own goroutine.
@@ -58,6 +72,10 @@ func (b *Bridge) Run() {
 		}
 		var m wsMessage
 		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		if m.Type == "tools.changed" {
+			b.signalChanged()
 			continue
 		}
 		b.mu.Lock()
