@@ -1634,8 +1634,11 @@
   function blankCheck() {
     return { name: "", command: "", expect: "", expectNot: false, exitZero: false, timeoutMs: 10000 };
   }
+  function blankDraft() {
+    return { name: "测试", script: "", expect: "", expectNot: false, exitZero: false, timeoutMs: 60000, checks: [blankCheck()] };
+  }
   function newTest() {
-    state.testDraft = { name: "测试", checks: [blankCheck()] };
+    state.testDraft = blankDraft();
     state.activeTestId = null;
     state.testStep = "connect";
     openTestView();
@@ -1643,7 +1646,7 @@
   // Open the test session from the tab strip: resume the selected run, or an
   // existing draft, without discarding either.
   function openTestSession() {
-    if (!state.testDraft) state.testDraft = { name: "测试", checks: [blankCheck()] };
+    if (!state.testDraft) state.testDraft = blankDraft();
     if (!state.activeTestId) state.testStep = "connect";
     openTestView();
   }
@@ -1683,6 +1686,11 @@
     const d = state.testDraft || { name: "测试", checks: [] };
     return {
       name: (d.name || "测试").trim() || "测试",
+      script: d.script || "",
+      expect: d.expect || "",
+      expectNot: !!d.expectNot,
+      exitZero: !!d.exitZero,
+      timeoutMs: Number(d.timeoutMs) || 0,
       checks: (d.checks || []).map((c) => ({
         name: c.name || "",
         command: c.command || "",
@@ -1696,6 +1704,11 @@
   function defToDraft(def) {
     return {
       name: (def && def.name) || "测试",
+      script: (def && def.script) || "",
+      expect: (def && def.expect) || "",
+      expectNot: !!(def && def.expectNot),
+      exitZero: !!(def && def.exitZero),
+      timeoutMs: (def && def.timeoutMs) || 60000,
       checks: ((def && def.checks) || []).map((c) => ({
         name: c.name || "", command: c.command || "", expect: c.expect || "",
         expectNot: !!c.expectNot, exitZero: !!c.exitZero, timeoutMs: c.timeoutMs || 10000,
@@ -1718,7 +1731,7 @@
     updatePill();
   }
   function onTestDefs(p) {
-    state.testDefs = { definitions: p.definitions || [], runs: p.runs || [] };
+    state.testDefs = { definitions: p.definitions || [], runs: p.runs || [], scripts: p.scripts || [] };
     renderTestList();
   }
   function onTestDefinition(p) {
@@ -1787,7 +1800,7 @@
     openTestView();
   }
   function renderTestView() {
-    if (!state.testDraft) state.testDraft = { name: "测试", checks: [blankCheck()] };
+    if (!state.testDraft) state.testDraft = blankDraft();
     const run = activeTestRun();
     $("test-name").value = state.testDraft.name || "";
     $("tab-test-label").textContent = "测试 · " + (state.testDraft.name || "测试");
@@ -1818,6 +1831,29 @@
     $("test-status").className = "pill" + (run && run.status === "passed" ? " ok" : "");
     $("test-start").textContent = run && testFinished(run) ? "再次运行" : "开始测试";
     $("test-abort").disabled = !(run && !testFinished(run));
+
+    const scriptSel = $("test-script");
+    scriptSel.textContent = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "（不使用脚本，用下面的检查项）";
+    scriptSel.appendChild(none);
+    for (const s of state.testDefs.scripts || []) {
+      const o = document.createElement("option");
+      o.value = s.path;
+      o.textContent = s.name;
+      scriptSel.appendChild(o);
+    }
+    scriptSel.value = state.testDraft.script || "";
+    $("test-script-expect").value = state.testDraft.expect || "";
+    $("test-script-timeout").value = state.testDraft.timeoutMs || 60000;
+    $("test-script-exitzero").checked = !!state.testDraft.exitZero;
+    const hasScript = !!state.testDraft.script;
+    $("test-script-opts").classList.toggle("hidden", !hasScript);
+    $("test-checks").classList.toggle("dim", hasScript);
+    $("test-hint").textContent = hasScript
+      ? "已选择脚本：运行测试时会在目标设备上执行该脚本（SSH 经 SFTP 上传，串口用 heredoc），忽略下面的检查项。"
+      : "选择目标会话后点「开始测试」，将依次执行 连接 → 运行 → 生成 → 归档。";
     renderChecks();
     renderStepper(run);
     renderTestDetail(run);
@@ -1930,6 +1966,13 @@
       $("tab-test-label").textContent = "测试 · " + ($("test-name").value || "测试");
     });
     $("test-add").addEventListener("click", () => { state.testDraft.checks.push(blankCheck()); renderChecks(); });
+    $("test-script").addEventListener("change", () => {
+      state.testDraft.script = $("test-script").value;
+      renderTestView();
+    });
+    $("test-script-expect").addEventListener("change", () => { state.testDraft.expect = $("test-script-expect").value; });
+    $("test-script-timeout").addEventListener("change", () => { state.testDraft.timeoutMs = Number($("test-script-timeout").value) || 0; });
+    $("test-script-exitzero").addEventListener("change", () => { state.testDraft.exitZero = $("test-script-exitzero").checked; });
     $("test-load").addEventListener("click", showDefinitions);
     $("test-save").addEventListener("click", saveDefinition);
     $("test-start").addEventListener("click", startTest);

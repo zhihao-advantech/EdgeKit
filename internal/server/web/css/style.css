@@ -661,3 +661,22 @@ button#btn-kits { margin-bottom: 0; }
 .tab.tab-new:hover { background: #e9eef4; color: var(--ink); }
 .def-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .def-list .btn { text-align: left; justify-content: flex-start; }
+.test-script-row { display: flex; align-items: center; gap: 8px; }
+.test-script-row span { font-size: 12px; color: var(--ink-dim); }
+.test-script-row select {
+  flex: 0 1 280px; padding: 4px 6px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel); color: var(--ink); font: inherit;
+}
+.test-script-opts { gap: 6px; }
+#test-script-expect {
+  flex: 1; padding: 4px 6px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel); color: var(--ink); font: inherit; min-width: 0;
+}
+#test-script-timeout {
+  width: 90px; padding: 4px 6px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel); color: var(--ink); font: inherit;
+}
+.test-checks.dim { opacity: .45; }

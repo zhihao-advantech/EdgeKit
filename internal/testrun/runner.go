@@ -3,6 +3,7 @@ package testrun
 import (
 	"context"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -26,6 +27,9 @@ type Device interface {
 	Exec(ctx context.Context, command string) (output string, exitOK bool, err error)
 	// Wait blocks until pattern (a regexp) appears in the device output.
 	Wait(ctx context.Context, pattern string, timeout time.Duration) (matched string, err error)
+	// RunScript runs a workspace script (tests/*.sh) on the device and reports
+	// its output and whether it exited successfully.
+	RunScript(ctx context.Context, script string) (output string, exitOK bool, err error)
 }
 
 // Archiver persists a finished run. It returns a workspace-relative path.
@@ -228,20 +232,20 @@ func (r *Runner) execConnect(ctx context.Context) {
 
 func (r *Runner) execRun(ctx context.Context) {
 	r.beginPhase(PhaseRun)
-	results := make([]CheckResult, 0, len(r.run.Definition.Checks))
+
+	var results []CheckResult
+	if r.run.Definition.UsesScript() {
+		results = []CheckResult{r.runScriptCheck(ctx)}
+	} else {
+		results = r.runChecks(ctx)
+	}
+
 	failed := 0
-	for i, c := range r.run.Definition.Checks {
-		if ctx.Err() != nil {
-			results = append(results, CheckResult{Index: i, Name: c.Name, Command: c.Command, Status: CheckSkip, Err: "已中止"})
-			continue
-		}
-		res := r.runCheck(ctx, i, c)
+	for _, res := range results {
 		if res.Status == CheckFail {
 			failed++
 		}
-		results = append(results, res)
 	}
-
 	status := StatusPassed
 	summary := fmt.Sprintf("%d 项检查全部通过", len(results))
 	if failed > 0 {
@@ -259,6 +263,76 @@ func (r *Runner) execRun(ctx context.Context) {
 	}
 	r.mu.Unlock()
 	r.endPhase(PhaseRun, status, summary, "", "")
+}
+
+// runChecks executes the inline command/expect checks.
+func (r *Runner) runChecks(ctx context.Context) []CheckResult {
+	checks := r.run.Definition.Checks
+	results := make([]CheckResult, 0, len(checks))
+	for i, c := range checks {
+		if ctx.Err() != nil {
+			results = append(results, CheckResult{Index: i, Name: c.Name, Command: c.Command, Status: CheckSkip, Err: "已中止"})
+			continue
+		}
+		results = append(results, r.runCheck(ctx, i, c))
+	}
+	return results
+}
+
+// runScriptCheck runs the case's workspace script on the device.
+func (r *Runner) runScriptCheck(ctx context.Context) CheckResult {
+	def := r.run.Definition
+	name := path.Base(def.Script)
+	res := CheckResult{Name: name, Command: def.Script, Status: CheckPass}
+
+	timeout := time.Duration(def.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	out, exitOK, err := r.dev.RunScript(cctx, def.Script)
+	if err != nil {
+		res.Status = CheckFail
+		res.Err = err.Error()
+		res.Output = truncate(out)
+		return res
+	}
+	if def.ExitZero && !exitOK {
+		res.Status = CheckFail
+		res.Err = "脚本返回非零退出码"
+		res.Output = truncate(out)
+		return res
+	}
+	if strings.TrimSpace(def.Expect) != "" {
+		re, err := regexp.Compile(def.Expect)
+		if err != nil {
+			res.Status = CheckFail
+			res.Err = "期望值不是合法正则: " + err.Error()
+			res.Output = truncate(out)
+			return res
+		}
+		if def.ExpectNot {
+			if re.MatchString(out) {
+				res.Status = CheckFail
+				res.Err = "输出不应匹配: " + def.Expect
+				res.Output = truncate(out)
+				return res
+			}
+		} else if !re.MatchString(out) {
+			matched, werr := r.dev.Wait(ctx, def.Expect, timeout)
+			if werr != nil {
+				res.Status = CheckFail
+				res.Err = "未在超时内匹配: " + def.Expect
+				res.Output = truncate(out)
+				return res
+			}
+			out = matched
+		}
+	}
+	res.Output = truncate(out)
+	return res
 }
 
 func (r *Runner) runCheck(ctx context.Context, i int, c Check) CheckResult {

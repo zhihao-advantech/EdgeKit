@@ -784,3 +784,54 @@ func TestE2ETestBatch(t *testing.T) {
 		finished[run.ID] = true
 	}
 }
+
+// TestE2ETestScriptDefinition covers selecting a workspace script: the script
+// is listed, and a definition that runs it round-trips through the workspace.
+func TestE2ETestScriptDefinition(t *testing.T) {
+	_, c := startE2EServer(t)
+	if _, err := workspace.Write("tests/smoke.sh", []byte("#!/bin/sh\necho PASSED\n")); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	c.send("test.defs", nil)
+	var defs struct {
+		Scripts []struct {
+			Path string `json:"path"`
+			Name string `json:"name"`
+		} `json:"scripts"`
+	}
+	if err := json.Unmarshal(c.until("test.defs").Payload, &defs); err != nil {
+		t.Fatalf("decode test.defs: %v", err)
+	}
+	found := false
+	for _, s := range defs.Scripts {
+		if s.Path == "tests/smoke.sh" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("script not listed: %+v", defs.Scripts)
+	}
+
+	c.send("test.save", map[string]any{"name": "smoke", "definition": map[string]any{
+		"name": "smoke", "script": "tests/smoke.sh", "expect": "PASSED", "exitZero": true, "timeoutMs": 30000,
+	}})
+	var saved struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(c.until("test.saved").Payload, &saved); err != nil {
+		t.Fatalf("decode test.saved: %v", err)
+	}
+
+	c.send("test.load", map[string]any{"path": saved.Path})
+	var loaded struct {
+		Definition testrun.Definition `json:"definition"`
+	}
+	if err := json.Unmarshal(c.until("test.definition").Payload, &loaded); err != nil {
+		t.Fatalf("decode test.definition: %v", err)
+	}
+	d := loaded.Definition
+	if d.Script != "tests/smoke.sh" || !d.ExitZero || d.TimeoutMS != 30000 || !d.UsesScript() {
+		t.Fatalf("loaded script definition = %+v", d)
+	}
+}

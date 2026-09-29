@@ -126,8 +126,10 @@ mode 0600).
 
 Create one from "Test sessions → +" in the session list, or the "测试会话" tab in
 the tab strip: the right pane drives four steps,
-**connect → run → generate → archive**. A case is a list of commands with
-expected output (regexp), an optional timeout and exit-code check. Cases can be
+**connect → run → generate → archive**. A case is either a **workspace script**
+(pick a `tests/*.sh`; it runs on the device — uploaded over SFTP for SSH, fed
+through a heredoc on serial) or a list of commands with expected output
+(regexp); both support a timeout and exit-code check. Cases can be
 saved to the workspace as `tests/<name>.test.json` (edit the file directly and
 reload it, too), and results plus a Markdown report are archived under
 `~/EdgeKit/workspace/tests/runs/<id>/`; a failed run is still reported and

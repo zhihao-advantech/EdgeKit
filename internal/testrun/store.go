@@ -83,6 +83,23 @@ func (Store) ListDefinitions() []DefinitionRef {
 	return out
 }
 
+// ListScripts returns the workspace test scripts (tests/*.sh).
+func (Store) ListScripts() []DefinitionRef {
+	entries, err := workspace.List("tests")
+	if err != nil {
+		return nil
+	}
+	out := make([]DefinitionRef, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir || !strings.HasSuffix(e.Name, ".sh") {
+			continue
+		}
+		out = append(out, DefinitionRef{Path: path.Join("tests", e.Name), Name: e.Name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // ReadDefinition loads a saved test case.
 func (Store) ReadDefinition(rel string) (Definition, error) {
 	rel = path.Clean(rel)

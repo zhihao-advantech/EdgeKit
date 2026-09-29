@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"edgekit/internal/workspace"
 )
 
 func TestStoreDefinitionsRoundTrip(t *testing.T) {
@@ -82,5 +84,19 @@ func TestStorePreviousRun(t *testing.T) {
 	}
 	if _, ok := st.Previous("nope", "run-a"); ok {
 		t.Fatal("unknown name should have no previous")
+	}
+}
+
+func TestStoreListScripts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := workspace.Write("tests/smoke.sh", []byte("echo hi\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Write("tests/notes.txt", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	scripts := (Store{}).ListScripts()
+	if len(scripts) != 1 || scripts[0].Path != "tests/smoke.sh" {
+		t.Fatalf("scripts = %+v", scripts)
 	}
 }

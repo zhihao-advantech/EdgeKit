@@ -60,11 +60,12 @@ func (k testKit) Tools() []kit.Tool {
 		{
 			Name: "test_run",
 			Description: "在目标设备会话上运行一次测试：连接 → 运行 → 生成 → 归档（归档到本地工作区）。" +
-				"用 path 指定工作区里已保存的定义，或用 command/expect 直接给一次性检查；" +
-				"返回结论、逐项结果与归档路径。",
+				"用 path 指定工作区里已保存的定义，用 script 运行工作区脚本（tests/*.sh），" +
+				"或用 command/expect 直接给一次性检查；返回结论、逐项结果与归档路径。",
 			Risk: kit.RiskMutate,
 			Schema: deviceObj(map[string]any{
 				"path":       strType(),
+				"script":     strType(),
 				"name":       strType(),
 				"command":    strType(),
 				"expect":     strType(),
@@ -77,13 +78,29 @@ func (k testKit) Tools() []kit.Tool {
 				}
 				session := argString(args, "session")
 				path := strings.TrimSpace(argString(args, "path"))
+				script := strings.TrimSpace(argString(args, "script"))
 
 				var def *testrun.Definition
-				if path == "" {
+				switch {
+				case path != "":
+					// run a saved definition
+				case script != "":
+					d := testrun.Definition{
+						Name:      argString(args, "name"),
+						Script:    script,
+						Expect:    argString(args, "expect"),
+						ExitZero:  argBool(args, "exit_zero"),
+						TimeoutMS: argInt(args, "timeout_ms", 60000),
+					}
+					if d.Name == "" {
+						d.Name = script
+					}
+					def = &d
+				default:
 					command := argString(args, "command")
 					expect := argString(args, "expect")
 					if strings.TrimSpace(command) == "" && strings.TrimSpace(expect) == "" {
-						return "", fmt.Errorf("请提供 path（工作区定义）或 command/expect")
+						return "", fmt.Errorf("请提供 path、script 或 command/expect")
 					}
 					d := testrun.Definition{
 						Name: argString(args, "name"),

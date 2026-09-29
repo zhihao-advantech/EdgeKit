@@ -14,12 +14,25 @@ type fakeDevice struct {
 	outputs map[string]string
 	exitBad map[string]bool
 	waits   map[string]bool
+
+	scriptOut string
+	scriptBad bool
+	scriptErr error
+	gotScript string
 }
 
 func (f *fakeDevice) Info() Info { return f.info }
 
 func (f *fakeDevice) Exec(_ context.Context, command string) (string, bool, error) {
 	return f.outputs[command], !f.exitBad[command], nil
+}
+
+func (f *fakeDevice) RunScript(_ context.Context, script string) (string, bool, error) {
+	f.gotScript = script
+	if f.scriptErr != nil {
+		return "", false, f.scriptErr
+	}
+	return f.scriptOut, !f.scriptBad, nil
 }
 
 func (f *fakeDevice) Wait(_ context.Context, pattern string, _ time.Duration) (string, error) {
@@ -207,5 +220,50 @@ func TestReportFixComparison(t *testing.T) {
 
 	if report := r.Snapshot().PhaseOutput(PhaseGenerate); !strings.Contains(report, "修复") {
 		t.Fatalf("report should note the fix:\n%s", report)
+	}
+}
+
+func TestRunScriptCase(t *testing.T) {
+	dev := connected()
+	dev.scriptOut = "smoke: ALL TESTS PASSED\n"
+	def := Definition{Name: "smoke", Script: "tests/smoke.sh", Expect: "PASSED", ExitZero: true}
+	r := New("r-s", "smoke", "serial-1", def, dev, &fakeArchiver{path: "tests/runs/r-s"}, nil)
+
+	r.RunAll(context.Background())
+	run := r.Snapshot()
+
+	if run.Status != StatusPassed {
+		t.Fatalf("script run = %s (%+v)", run.Status, run.Phase(PhaseRun))
+	}
+	if dev.gotScript != "tests/smoke.sh" {
+		t.Fatalf("script not used: %q", dev.gotScript)
+	}
+	p := run.Phase(PhaseRun)
+	if len(p.Checks) != 1 || p.Checks[0].Status != CheckPass || !strings.Contains(p.Checks[0].Command, "tests/smoke.sh") {
+		t.Fatalf("script check = %+v", p.Checks)
+	}
+}
+
+func TestRunScriptCaseFails(t *testing.T) {
+	dev := connected()
+	dev.scriptOut = "smoke: FAILED\n"
+	def := Definition{Name: "smoke", Script: "tests/smoke.sh", Expect: "PASSED"}
+	r := New("r-s2", "smoke", "serial-1", def, dev, &fakeArchiver{}, nil)
+
+	r.RunAll(context.Background())
+	if r.Snapshot().Status != StatusFailed {
+		t.Fatalf("expected failure when the script output misses the expectation")
+	}
+}
+
+func TestRunScriptExitCode(t *testing.T) {
+	dev := connected()
+	dev.scriptBad = true
+	def := Definition{Name: "smoke", Script: "tests/smoke.sh", ExitZero: true}
+	r := New("r-s3", "smoke", "serial-1", def, dev, &fakeArchiver{}, nil)
+
+	r.RunAll(context.Background())
+	if r.Snapshot().Status != StatusFailed {
+		t.Fatal("non-zero script exit should fail when exitZero is set")
 	}
 }

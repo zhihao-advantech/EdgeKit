@@ -148,8 +148,9 @@ SFTP / Timeline）在未连接对应设备会话时同样隐藏**，连接后自
 不带时作用于当前聚焦会话；传了未知 id 会返回可用列表。
 
 **测试运行**：`test_list` 列出工作区里已保存的测试定义与历史运行；`test_run` 在目标设备上
-跑一次测试（连接 → 运行 → 生成 → 归档，结果落工作区，属修改性操作需审批），可用 `path`
-指定 `tests/*.test.json`，或用 `command`/`expect`/`timeout_ms` 直接一次性检查；
+跑一次测试（连接 → 运行 → 生成 → 归档，结果落工作区，属修改性操作需审批）。用例三选一：
+`path` 指定 `tests/*.test.json`；`script` 运行工作区脚本 `tests/*.sh`（SSH 经 SFTP 上传执行，
+串口用 heredoc）；或 `command`/`expect`/`timeout_ms`/`exit_zero` 直接一次性检查。
 `test_report` 读取某次归档运行的 Markdown 报告。
 
 未配置模型时，内置 Agent 走 **Normal 模式**（内置流程）：巡检、系统日志、磁盘、内存、进程、系统版本、ping。

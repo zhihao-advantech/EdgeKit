@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"edgekit/internal/testrun"
 	"edgekit/internal/timeline"
+	"edgekit/internal/workspace"
 )
 
 // testManager owns the running test runs of one server instance.
@@ -212,6 +215,7 @@ func (m *testManager) handleDefs(c *client) {
 	m.s.sendTo(c, "test.defs", map[string]any{
 		"definitions": store.ListDefinitions(),
 		"runs":        store.ListRuns(),
+		"scripts":     store.ListScripts(),
 	})
 }
 
@@ -276,6 +280,7 @@ func (m *testManager) broadcastDefs() {
 	m.s.broadcast("test.defs", map[string]any{
 		"definitions": store.ListDefinitions(),
 		"runs":        store.ListRuns(),
+		"scripts":     store.ListScripts(),
 	})
 }
 
@@ -421,4 +426,55 @@ func (d testDevice) Wait(ctx context.Context, pattern string, timeout time.Durat
 		return "", err
 	}
 	return string(rec.Data), nil
+}
+
+// RunScript executes a workspace script (tests/*.sh) on the device. With SSH it
+// uploads the script over SFTP and runs it; on a serial console it feeds the
+// script to the device shell through a heredoc and reads back the exit code.
+func (d testDevice) RunScript(ctx context.Context, script string) (string, bool, error) {
+	ds := d.s.session(d.id)
+	if ds == nil {
+		return "", false, fmt.Errorf("会话不存在: %s", d.id)
+	}
+	clean := path.Clean(strings.ReplaceAll(script, "\\", "/"))
+	if !strings.HasPrefix(clean, "tests/") || !strings.HasSuffix(clean, ".sh") {
+		return "", false, fmt.Errorf("脚本需位于工作区 tests/ 且以 .sh 结尾: %s", script)
+	}
+	data, err := workspace.Read(clean)
+	if err != nil {
+		return "", false, err
+	}
+
+	remote := fmt.Sprintf("/tmp/edgekit-test-%d.sh", time.Now().UnixNano())
+
+	// SSH: upload, run, clean up.
+	if ds.sftp != nil && ds.sftp.IsConnected() && ds.ssh != nil && ds.ssh.IsConnected() {
+		if err := ds.sftp.Upload(remote, data); err != nil {
+			return "", false, err
+		}
+		out, err := ds.ssh.ExecCapture("sh "+remote, 64*1024)
+		_ = ds.sftp.Delete(remote)
+		if err != nil {
+			return out, false, err
+		}
+		return out, !strings.Contains(out, "(exit:"), nil
+	}
+
+	// Serial: write the script with a heredoc, then run it and echo the status.
+	if ds.serial != nil && ds.serial.IsOpen() {
+		const tag = "__EDGEKIT_EXIT__"
+		cmd := "cat > " + remote + " <<'EK_SCRIPT_EOF'\n" + string(data) +
+			"\nEK_SCRIPT_EOF\nsh " + remote + "; echo " + tag + "$?"
+		out, err := ds.serial.RunCapture(cmd, 500*time.Millisecond, 60*time.Second)
+		if err != nil {
+			return out, false, err
+		}
+		code := 0
+		if m := regexp.MustCompile(tag + `(\d+)`).FindStringSubmatch(out); m != nil {
+			code, _ = strconv.Atoi(m[1])
+		}
+		return out, code == 0, nil
+	}
+
+	return "", false, fmt.Errorf("脚本测试需要已连接的 SSH（含 SFTP）或串口会话")
 }
