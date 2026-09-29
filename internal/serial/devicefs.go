@@ -65,9 +65,8 @@ func (m *Manager) RunCaptureSilentUntil(ctx context.Context, command, marker str
 	defer timer.Stop()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
-	lastTotal := start
-	lastChange := time.Now()
 	markerSeen := false
+	var markerAt time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -77,18 +76,15 @@ func (m *Manager) RunCaptureSilentUntil(ctx context.Context, command, marker str
 			_ = m.writeRaw([]byte{0x03})
 			return string(m.captureFrom(start)), fmt.Errorf("串口命令超时（>%s）", timeout)
 		case <-ticker.C:
-			m.mu.Lock()
-			total := m.rxTotal
-			m.mu.Unlock()
 			out := string(m.captureFrom(start))
-			if markerRe.MatchString(out) {
+			if !markerSeen && markerRe.MatchString(out) {
 				markerSeen = true
+				markerAt = time.Now()
 			}
-			if total != lastTotal {
-				lastTotal = total
-				lastChange = time.Now()
-			}
-			if markerSeen && time.Since(lastChange) >= quiet {
+			// Measure the tail from the completion marker, not from every byte:
+			// a device with ongoing background logs must not keep a completed
+			// script capture alive until timeout.
+			if markerSeen && time.Since(markerAt) >= quiet {
 				return out, nil
 			}
 		}

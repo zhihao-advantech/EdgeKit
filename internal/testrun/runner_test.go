@@ -275,6 +275,24 @@ func TestRunScriptExitCode(t *testing.T) {
 	}
 }
 
+func TestExpectNotWaitsForTheWholeWindow(t *testing.T) {
+	dev := connected()
+	def := Definition{Name: "quiet", Checks: []Check{{Expect: "PANIC", ExpectNot: true, TimeoutMS: 200}}}
+	r := New("r-not", "quiet", "serial-1", def, dev, &fakeArchiver{}, nil)
+	r.RunAll(context.Background())
+	if got := r.Snapshot().Status; got != StatusPassed {
+		t.Fatalf("absent output should pass, got %s", got)
+	}
+
+	dev = connected()
+	dev.waits["PANIC"] = true
+	r = New("r-not2", "quiet", "serial-1", def, dev, &fakeArchiver{}, nil)
+	r.RunAll(context.Background())
+	if got := r.Snapshot().Status; got != StatusFailed {
+		t.Fatalf("forbidden output should fail, got %s", got)
+	}
+}
+
 func TestCleanOutput(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"a\r\nb", "a\nb"},
@@ -366,5 +384,16 @@ func TestAbortMarksAbortedNotPassed(t *testing.T) {
 	}
 	if run.Phase(PhaseRun).Status != StatusAborted {
 		t.Fatalf("run phase = %s, want aborted", run.Phase(PhaseRun).Status)
+	}
+}
+
+func TestRunPhaseEnforcesOrder(t *testing.T) {
+	r := New("r-order", "order", "serial-1", Definition{Name: "order", Checks: []Check{{Command: "true"}}}, connected(), &fakeArchiver{}, nil)
+	if err := r.RunPhase(context.Background(), PhaseArchive); err == nil {
+		t.Fatal("archive must not run before connect/run/generate")
+	}
+	snap := r.Snapshot()
+	if got := snap.Phase(PhaseArchive).Status; got != StatusPending {
+		t.Fatalf("invalid phase request changed state: %s", got)
 	}
 }

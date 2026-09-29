@@ -383,10 +383,16 @@ func (s *Server) updateDeviceEvents() {
 // dropped, then recomputes activation. It is a no-op while the manager still
 // reports the connection alive (e.g. an SSH shell ending but the link up).
 func (s *Server) markDisconnected(id string) {
-	ds := s.session(id)
-	if ds == nil || !ds.connected {
+	s.mu.Lock()
+	ds := s.sessions[id]
+	connected := ds != nil && ds.connected
+	s.mu.Unlock()
+	if !connected {
 		return
 	}
+	// Query the manager outside the server lock. Some close/error events are
+	// emitted just before the manager flips its own state; a later close/info
+	// event will retry this check.
 	switch ds.kind {
 	case "serial":
 		if ds.serial != nil && ds.serial.IsOpen() {
@@ -398,7 +404,9 @@ func (s *Server) markDisconnected(id string) {
 		}
 	}
 	s.mu.Lock()
-	ds.connected = false
+	if s.sessions[id] == ds {
+		ds.connected = false
+	}
 	s.mu.Unlock()
 	s.updateDeviceEvents()
 }
@@ -1108,7 +1116,7 @@ func (s *Server) onSerialEvent(id string, ev serial.Event) {
 	s.record(id, timeline.Record{Channel: timeline.ChannelSerial, Kind: ev.Direction, Time: ev.Time, Data: ev.Data})
 	batchable := ev.Direction == serial.DirRX || ev.Direction == serial.DirTX
 	s.batch.add("serial", id, ev.Direction, ev.Data, ev.Time, batchable)
-	if ev.Direction == serial.DirError {
+	if !batchable {
 		s.markDisconnected(id)
 	}
 }

@@ -42,20 +42,24 @@ type Archiver interface {
 // Runner executes one Run against one Device, publishing state after every
 // change so the UI (and later an agent) can follow along.
 type Runner struct {
-	mu        sync.Mutex
-	run       Run
-	dev       Device
-	store     Archiver
-	prev      *Run // previous run of the same name, for the report comparison
-	onUpdate  func(Run)
-	cancel    context.CancelFunc
-	busy      bool
-	abandoned bool // deleted: stop publishing and never archive
+	mu             sync.Mutex
+	run            Run
+	dev            Device
+	store          Archiver
+	prev           *Run // previous run of the same name, for the report comparison
+	onUpdate       func(Run)
+	cancel         context.CancelFunc
+	busy           bool
+	abandoned      bool // deleted: stop publishing and never archive
+	abortRequested bool
+	idle           chan struct{}
 }
 
 // New creates a runner for def bound to dev.
 func New(id, name, sessionID string, def Definition, dev Device, store Archiver, onUpdate func(Run)) *Runner {
-	r := &Runner{dev: dev, store: store, onUpdate: onUpdate}
+	idle := make(chan struct{})
+	close(idle)
+	r := &Runner{dev: dev, store: store, onUpdate: onUpdate, idle: idle}
 	r.run = *NewRun(id, name, sessionID, def)
 	return r
 }
@@ -115,11 +119,18 @@ func (r *Runner) isAbandoned() bool {
 // Abort cancels a running phase (no-op when idle).
 func (r *Runner) Abort() {
 	r.mu.Lock()
+	r.abortRequested = true
 	cancel := r.cancel
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+}
+
+func (r *Runner) abortRequestedNow() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.abortRequested
 }
 
 // markAborted records a cancelled run: the verdict is preserved if the run
@@ -150,6 +161,25 @@ func (r *Runner) Running() bool {
 	return r.busy
 }
 
+// WaitIdle waits until the current phase exits. An orchestrating RunAll may be
+// between phases while idle; Abandon makes its next phase check return before
+// it can archive.
+func (r *Runner) WaitIdle(ctx context.Context) error {
+	r.mu.Lock()
+	if !r.busy {
+		r.mu.Unlock()
+		return nil
+	}
+	idle := r.idle
+	r.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // RunPhase executes one phase of the pipeline.
 func (r *Runner) RunPhase(ctx context.Context, key string) error {
 	r.mu.Lock()
@@ -173,6 +203,7 @@ func (r *Runner) RunPhase(ctx context.Context, key string) error {
 		r.run.CreatedAt = time.Now()
 	}
 	r.busy = true
+	r.idle = make(chan struct{})
 	ctx, r.cancel = context.WithCancel(ctx)
 	r.mu.Unlock()
 
@@ -180,6 +211,7 @@ func (r *Runner) RunPhase(ctx context.Context, key string) error {
 		r.mu.Lock()
 		r.busy = false
 		r.cancel = nil
+		close(r.idle)
 		r.mu.Unlock()
 	}()
 
@@ -193,6 +225,13 @@ func (r *Runner) RunPhase(ctx context.Context, key string) error {
 	case PhaseArchive:
 		r.execArchive(ctx)
 	}
+	if ctx.Err() != nil {
+		r.markAborted()
+		return ctx.Err()
+	}
+	if r.isAbandoned() {
+		return fmt.Errorf("测试已删除")
+	}
 	return nil
 }
 
@@ -201,7 +240,7 @@ func (r *Runner) RunPhase(ctx context.Context, key string) error {
 func (r *Runner) prereqLocked(key string) error {
 	done := func(k string) bool {
 		st := r.phaseStatusLocked(k)
-		return st == StatusPassed || st == StatusFailed || st == StatusSkipped
+		return st == StatusPassed || st == StatusFailed || st == StatusSkipped || st == StatusAborted
 	}
 	switch key {
 	case PhaseConnect:
@@ -211,8 +250,8 @@ func (r *Runner) prereqLocked(key string) error {
 			return fmt.Errorf("请先完成「连接」")
 		}
 	case PhaseGenerate:
-		if !done(PhaseConnect) {
-			return fmt.Errorf("请先完成「连接」")
+		if !done(PhaseConnect) || !done(PhaseRun) {
+			return fmt.Errorf("请先完成「连接」和「运行」")
 		}
 	case PhaseArchive:
 		if !done(PhaseGenerate) {
@@ -233,24 +272,61 @@ func (r *Runner) phaseStatusLocked(key string) string {
 // and archive. A failed run still gets a report and an archive; a cancelled or
 // deleted run stops as soon as the current phase observes it.
 func (r *Runner) RunAll(ctx context.Context) {
-	for _, key := range PhaseKeys {
-		if r.isAbandoned() || ctx.Err() != nil {
-			r.markAborted()
-			return
+	if err := r.RunPhase(ctx, PhaseConnect); err != nil {
+		if ctx.Err() != nil || r.abortRequestedNow() {
+			r.finishAborted()
 		}
-		if key == PhaseRun && r.phaseStatus(PhaseConnect) != StatusPassed {
-			r.skipChecks("连接未通过，已跳过运行")
-			continue
-		}
-		if err := r.RunPhase(ctx, key); err != nil {
-			if ctx.Err() != nil || r.isAbandoned() {
-				r.markAborted()
-			}
-			return
-		}
+		return
 	}
-	if ctx.Err() != nil {
-		r.markAborted()
+	if r.isAbandoned() {
+		return
+	}
+	if r.abortRequestedNow() || ctx.Err() != nil {
+		r.finishAborted()
+		return
+	}
+	if r.phaseStatus(PhaseConnect) == StatusPassed {
+		if err := r.RunPhase(ctx, PhaseRun); err != nil && ctx.Err() == nil && !r.abortRequestedNow() {
+			return
+		}
+	} else {
+		r.skipChecks("连接未通过，已跳过运行")
+	}
+	if r.isAbandoned() {
+		return
+	}
+	if r.abortRequestedNow() || ctx.Err() != nil {
+		r.finishAborted()
+		return
+	}
+	if err := r.RunPhase(ctx, PhaseGenerate); err != nil && ctx.Err() == nil && !r.abortRequestedNow() {
+		return
+	}
+	if r.isAbandoned() {
+		return
+	}
+	if r.abortRequestedNow() || ctx.Err() != nil {
+		r.finishAborted()
+		return
+	}
+	if err := r.RunPhase(ctx, PhaseArchive); err != nil && ctx.Err() == nil && !r.abortRequestedNow() {
+		return
+	}
+}
+
+// finishAborted records the partial result and writes a final report/archive
+// using a fresh context after cancelling the in-flight operation.
+func (r *Runner) finishAborted() {
+	r.markAborted()
+	if r.isAbandoned() {
+		return
+	}
+	if r.phaseStatus(PhaseRun) == StatusPending {
+		r.skipChecks("已中止，未运行检查")
+	}
+	_ = r.RunPhase(context.Background(), PhaseGenerate)
+	if !r.isAbandoned() {
+		_ = r.RunPhase(context.Background(), PhaseArchive)
 	}
 }
 

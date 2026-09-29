@@ -1945,11 +1945,11 @@
       const p = (run.phases || []).find((x) => x.key === k);
       return p ? p.status : "pending";
     };
-    const terminal = (s) => ["passed", "failed", "skipped"].includes(s);
+    const terminal = (s) => ["passed", "failed", "skipped", "aborted"].includes(s);
     switch (key) {
       case "connect": return true;
       case "run": return st("connect") === "passed";
-      case "generate": return terminal(st("connect"));
+      case "generate": return terminal(st("connect")) && terminal(st("run"));
       case "archive": return terminal(st("generate"));
       default: return false;
     }

@@ -634,6 +634,12 @@ func (m *testManager) handleDeleteRun(c *client, msg message) {
 		// Abandon (not just Abort): the run stops publishing and will not
 		// archive, so a deleted record cannot reappear.
 		runner.Abandon()
+		stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := runner.WaitIdle(stopCtx); err != nil {
+			m.s.sendError(c, fmt.Errorf("测试仍在停止，暂不能删除: %w", err))
+			return
+		}
 	}
 	// RemoveAll on a missing directory is a no-op, so a run that never archived
 	// is deleted too.
