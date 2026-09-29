@@ -123,7 +123,7 @@ func (r *Run) Phase(key string) *Phase {
 }
 
 // PhaseOutput returns the remembered output of a phase.
-func (r *Run) PhaseOutput(key string) string {
+func (r Run) PhaseOutput(key string) string {
 	if p := r.Phase(key); p != nil {
 		return p.Output
 	}

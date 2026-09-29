@@ -110,7 +110,9 @@ openclaw mcp probe edgekit        # 列出可用工具（随设备连接变化�
 **连接 → 运行 → 生成 → 归档** 四步执行，用例为「命令 + 期望输出（正则）」，
 可选超时与退出码要求。用例可保存到工作区 `tests/<名称>.test.json`（也可直接编辑
 该文件后重新加载），运行结果与 Markdown 报告归档到
-`~/EdgeKit/workspace/tests/runs/<id>/`；失败也会照常出报告并归档。
+`~/EdgeKit/workspace/tests/runs/<id>/`；失败也会照常出报告并归档。目标可选「全部会话」
+做**批量运行**；报告会与同名上次运行对比，标出**回归 / 修复**。Agent 也可用
+`test_list` / `test_run` / `test_report` 工具驱动测试。
 
 ### 让 Agent 自己连板调试
 

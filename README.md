@@ -131,7 +131,10 @@ expected output (regexp), an optional timeout and exit-code check. Cases can be
 saved to the workspace as `tests/<name>.test.json` (edit the file directly and
 reload it, too), and results plus a Markdown report are archived under
 `~/EdgeKit/workspace/tests/runs/<id>/`; a failed run is still reported and
-archived.
+archived. Pick "all sessions" to run the case across every board; the report
+compares against the previous run of the same name and flags **regressions /
+fixes**. An agent can drive tests with the `test_list` / `test_run` /
+`test_report` tools.
 
 ### Let an agent debug boards itself
 

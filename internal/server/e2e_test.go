@@ -733,3 +733,54 @@ func TestE2ETestToolRun(t *testing.T) {
 		t.Fatalf("test_list: %+v", res)
 	}
 }
+
+// TestE2ETestBatch runs one case across every connected board and checks both
+// runs complete and pass.
+func TestE2ETestBatch(t *testing.T) {
+	edge1, peer1 := startVirtualSerialPair(t)
+	edge2, peer2 := startVirtualSerialPair(t)
+	p1 := openPeer(t, peer1)
+	p2 := openPeer(t, peer2)
+	_, c := startE2EServer(t)
+	id1 := c.openSerial(t, edge1)
+	id2 := c.openSerial(t, edge2)
+
+	if _, err := p1.Write([]byte("READY\n")); err != nil {
+		t.Fatalf("peer1 write: %v", err)
+	}
+	if _, err := p2.Write([]byte("READY\n")); err != nil {
+		t.Fatalf("peer2 write: %v", err)
+	}
+	c.waitSerialEvent(t, id1, "READY")
+	c.waitSerialEvent(t, id2, "READY")
+
+	c.send("test.batch", map[string]any{"name": "batch", "definition": map[string]any{
+		"name":   "batch",
+		"checks": []any{map[string]any{"name": "ready", "expect": "READY"}},
+	}})
+	var batch struct {
+		Runs []string `json:"runs"`
+	}
+	if err := json.Unmarshal(c.until("test.batch").Payload, &batch); err != nil {
+		t.Fatalf("decode test.batch: %v", err)
+	}
+	if len(batch.Runs) != 2 {
+		t.Fatalf("expected 2 batch runs, got %+v", batch.Runs)
+	}
+
+	finished := map[string]bool{}
+	deadline := time.Now().Add(15 * time.Second)
+	for len(finished) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("batch did not finish: %+v", finished)
+		}
+		run := c.waitRun()
+		if !run.Finished() {
+			continue
+		}
+		if run.Status != testrun.StatusPassed {
+			t.Fatalf("batch run %s = %s", run.ID, run.Status)
+		}
+		finished[run.ID] = true
+	}
+}

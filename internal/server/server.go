@@ -1358,6 +1358,8 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.handleToolCall(c, msg)
 	case "test.new":
 		s.tests.handleNew(c, msg)
+	case "test.batch":
+		s.tests.handleBatch(c, msg)
 	case "test.phase":
 		s.tests.handlePhase(c, msg)
 	case "test.abort":

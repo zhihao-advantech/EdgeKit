@@ -766,6 +766,11 @@
       case "timeline.records": onTimelineRecords(msg.payload || {}); break;
       case "test.created": onTestCreated(msg.payload || {}); break;
       case "test.state": onTestState(msg.payload || {}); break;
+      case "test.batch": {
+        const runs = (msg.payload && msg.payload.runs) || [];
+        toast("已启动 " + runs.length + " 个批量测试运行");
+        break;
+      }
       case "test.defs": onTestDefs(msg.payload || {}); break;
       case "test.definition": onTestDefinition(msg.payload || {}); break;
       case "test.saved":
@@ -1800,6 +1805,11 @@
       o.value = "";
       o.textContent = "（无设备会话）";
       sel.appendChild(o);
+    } else if (state.devices.size > 1) {
+      const o = document.createElement("option");
+      o.value = "__all__";
+      o.textContent = "全部会话（批量，共 " + state.devices.size + " 个）";
+      sel.appendChild(o);
     }
     const target = (run && run.sessionId) || state.focusDevice || (state.devices.size ? state.devices.keys().next().value : "");
     if (target) sel.value = target;
@@ -1898,6 +1908,10 @@
     if (!def.checks.length) { toast("请至少添加一条检查"); return; }
     const sid = $("test-target").value;
     if (!sid) { toast("请先选择目标设备会话"); return; }
+    if (sid === "__all__") {
+      send("test.batch", { name: def.name, definition: def });
+      return;
+    }
     send("test.new", { name: def.name, sessionId: sid, definition: def });
   }
   function abortTest() {

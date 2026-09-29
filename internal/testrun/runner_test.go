@@ -176,3 +176,36 @@ func TestStoreArchiveWritesWorkspace(t *testing.T) {
 		t.Fatalf("report not kept on run")
 	}
 }
+
+func TestReportRegressionComparison(t *testing.T) {
+	dev := connected()
+	def := Definition{Name: "boot", Checks: []Check{{Command: "uname -a", Expect: "NOPE"}}}
+
+	prev := *NewRun("r0", "boot", "serial-1", Definition{Name: "boot"})
+	prev.Status = StatusPassed
+
+	r := New("r1", "boot", "serial-1", def, dev, &fakeArchiver{}, nil)
+	r.SetPrevious(&prev)
+	r.RunAll(context.Background())
+
+	report := r.Snapshot().PhaseOutput(PhaseGenerate)
+	if !strings.Contains(report, "回归") {
+		t.Fatalf("report should flag the regression:\n%s", report)
+	}
+}
+
+func TestReportFixComparison(t *testing.T) {
+	dev := connected()
+	def := Definition{Name: "boot", Checks: []Check{{Command: "uname -a", Expect: "Linux"}}}
+
+	prev := *NewRun("r0", "boot", "serial-1", Definition{Name: "boot"})
+	prev.Status = StatusFailed
+
+	r := New("r1", "boot", "serial-1", def, dev, &fakeArchiver{}, nil)
+	r.SetPrevious(&prev)
+	r.RunAll(context.Background())
+
+	if report := r.Snapshot().PhaseOutput(PhaseGenerate); !strings.Contains(report, "修复") {
+		t.Fatalf("report should note the fix:\n%s", report)
+	}
+}

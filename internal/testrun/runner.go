@@ -40,6 +40,7 @@ type Runner struct {
 	run      Run
 	dev      Device
 	store    Archiver
+	prev     *Run // previous run of the same name, for the report comparison
 	onUpdate func(Run)
 	cancel   context.CancelFunc
 	busy     bool
@@ -50,6 +51,14 @@ func New(id, name, sessionID string, def Definition, dev Device, store Archiver,
 	r := &Runner{dev: dev, store: store, onUpdate: onUpdate}
 	r.run = *NewRun(id, name, sessionID, def)
 	return r
+}
+
+// SetPrevious records the previous run of the same name so the generated report
+// can call out regressions and fixes.
+func (r *Runner) SetPrevious(prev *Run) {
+	r.mu.Lock()
+	r.prev = prev
+	r.mu.Unlock()
 }
 
 // Snapshot returns a copy of the current run state.
@@ -353,6 +362,19 @@ func (r *Runner) buildReport() string {
 	fmt.Fprintf(&b, "- 结论：**%s**\n", run.ResultLabel())
 	if run.DefinitionRef != "" {
 		fmt.Fprintf(&b, "- 定义来源：`%s`\n", run.DefinitionRef)
+	}
+
+	r.mu.Lock()
+	prev := r.prev
+	r.mu.Unlock()
+	if prev != nil {
+		fmt.Fprintf(&b, "- 上次（%s）：%s\n", prev.CreatedAt.Format("2006-01-02 15:04"), prev.ResultLabel())
+		switch {
+		case prev.Status == StatusPassed && run.Status == StatusFailed:
+			b.WriteString("- **回归**：上次通过，本次失败\n")
+		case prev.Status == StatusFailed && run.Status == StatusPassed:
+			b.WriteString("- 修复：上次失败，本次通过\n")
+		}
 	}
 
 	if p := run.Phase(PhaseRun); p != nil && len(p.Checks) > 0 {

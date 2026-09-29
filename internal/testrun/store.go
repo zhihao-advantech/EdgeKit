@@ -161,6 +161,24 @@ func (Store) ReadRun(id string) (Run, error) {
 	return run, nil
 }
 
+// Previous returns the most recent archived run with the same name other than
+// excludeID, for the report's regression comparison.
+func (s Store) Previous(name, excludeID string) (Run, bool) {
+	if strings.TrimSpace(name) == "" {
+		return Run{}, false
+	}
+	for _, summary := range s.ListRuns() { // newest first
+		if summary.ID == excludeID || summary.Name != name {
+			continue
+		}
+		run, err := s.ReadRun(summary.ID)
+		if err == nil {
+			return run, true
+		}
+	}
+	return Run{}, false
+}
+
 // safeName turns a test name into a filename component.
 func safeName(s string) string {
 	s = strings.TrimSpace(s)

@@ -71,16 +71,86 @@ func (m *testManager) handleNew(c *client, msg message) {
 		p.Definition.Name = name
 	}
 
-	id := m.newID()
-	runner := testrun.New(id, name, sid, p.Definition, testDevice{s: m.s, id: sid}, testrun.Store{}, m.onUpdate)
+	runner := m.newRunner(name, sid, p.Definition)
 
+	// Tell the caller which run it just created, then publish the initial state.
+	m.s.sendTo(c, "test.created", map[string]any{"runId": runner.Snapshot().ID})
+	m.onUpdate(runner.Snapshot())
+}
+
+// newRunner builds and registers a runner, wiring in the previous run of the
+// same name so the report can call out regressions.
+func (m *testManager) newRunner(name, sid string, def testrun.Definition) *testrun.Runner {
+	id := m.newID()
+	runner := testrun.New(id, name, sid, def, testDevice{s: m.s, id: sid}, testrun.Store{}, m.onUpdate)
+	if prev, ok := (testrun.Store{}).Previous(name, id); ok {
+		runner.SetPrevious(&prev)
+	}
 	m.mu.Lock()
 	m.runs[id] = runner
 	m.mu.Unlock()
+	return runner
+}
 
-	// Tell the caller which run it just created, then publish the initial state.
-	m.s.sendTo(c, "test.created", map[string]any{"runId": id})
-	m.onUpdate(runner.Snapshot())
+// handleBatch runs one case on several device sessions (all connected ones when
+// none are named) and returns the created run ids.
+func (m *testManager) handleBatch(c *client, msg message) {
+	var p struct {
+		Name       string             `json:"name"`
+		Path       string             `json:"path"`
+		Definition testrun.Definition `json:"definition"`
+		Sessions   []string           `json:"sessions"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+
+	def := p.Definition
+	if strings.TrimSpace(p.Path) != "" {
+		got, err := (testrun.Store{}).ReadDefinition(p.Path)
+		if err != nil {
+			m.s.sendError(c, err)
+			return
+		}
+		def = got
+	}
+	if def.Name == "" {
+		def.Name = p.Name
+	}
+	if def.Name == "" {
+		def.Name = "测试"
+	}
+
+	targets := p.Sessions
+	if len(targets) == 0 {
+		for _, si := range m.s.sessionsDirectory() {
+			if si.Connected && (si.Kind == "serial" || si.Kind == "ssh") {
+				targets = append(targets, si.ID)
+			}
+		}
+	}
+	if len(targets) == 0 {
+		m.s.sendError(c, fmt.Errorf("没有已连接的设备会话"))
+		return
+	}
+
+	runners := make([]*testrun.Runner, 0, len(targets))
+	ids := make([]string, 0, len(targets))
+	for _, sid := range targets {
+		if m.s.session(sid) == nil {
+			continue
+		}
+		runner := m.newRunner(def.Name, sid, def)
+		runners = append(runners, runner)
+		ids = append(ids, runner.Snapshot().ID)
+	}
+	// Announce the batch before starting, so the first state updates are not
+	// missed by the caller.
+	m.s.sendTo(c, "test.batch", map[string]any{"runs": ids})
+	for _, runner := range runners {
+		go runner.RunAll(context.Background())
+	}
 }
 
 // handlePhase runs one phase ("connect"/"run"/"generate"/"archive") or "all".
@@ -262,12 +332,7 @@ func (m *testManager) Run(ctx context.Context, sessionID, path string, def *test
 	if name == "" {
 		name = "测试"
 	}
-	id := m.newID()
-	runner := testrun.New(id, name, sid, d, testDevice{s: m.s, id: sid}, testrun.Store{}, m.onUpdate)
-	m.mu.Lock()
-	m.runs[id] = runner
-	m.mu.Unlock()
-
+	runner := m.newRunner(name, sid, d)
 	runner.RunAll(ctx)
 	return runner.Snapshot(), nil
 }

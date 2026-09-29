@@ -3,6 +3,7 @@ package testrun
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStoreDefinitionsRoundTrip(t *testing.T) {
@@ -53,5 +54,33 @@ func TestStoreRunsHistory(t *testing.T) {
 	}
 	if _, err := st.ReadRun("../etc/passwd"); err == nil {
 		t.Fatal("run id with a path separator should be rejected")
+	}
+}
+
+func TestStorePreviousRun(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st := Store{}
+
+	first := NewRun("run-a", "boot", "serial-1", Definition{Name: "boot"})
+	first.CreatedAt = first.CreatedAt.Add(-time.Hour)
+	first.Status = StatusPassed
+	if _, err := st.Archive(first); err != nil {
+		t.Fatal(err)
+	}
+	second := NewRun("run-b", "boot", "serial-1", Definition{Name: "boot"})
+	second.Status = StatusFailed
+	if _, err := st.Archive(second); err != nil {
+		t.Fatal(err)
+	}
+
+	prev, ok := st.Previous("boot", "run-b")
+	if !ok || prev.ID != "run-a" {
+		t.Fatalf("previous = %+v, %v", prev, ok)
+	}
+	if _, ok := st.Previous("boot", "run-a"); !ok {
+		t.Fatal("previous should find run-b when excluding run-a")
+	}
+	if _, ok := st.Previous("nope", "run-a"); ok {
+		t.Fatal("unknown name should have no previous")
 	}
 }
