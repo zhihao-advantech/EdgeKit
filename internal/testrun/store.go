@@ -34,6 +34,9 @@ type RunSummary struct {
 // Archive writes the run bundle (run.json, definition.json, report.md) and
 // returns the workspace-relative directory.
 func (Store) Archive(run *Run) (string, error) {
+	if !validRunID(run.ID) {
+		return "", fmt.Errorf("无效的运行 ID: %q", run.ID)
+	}
 	rel := path.Join("tests", "runs", run.ID)
 
 	runJSON, err := json.MarshalIndent(run, "", "  ")
@@ -164,7 +167,7 @@ func (Store) ListRuns() []RunSummary {
 
 // ReadRun loads an archived run.
 func (Store) ReadRun(id string) (Run, error) {
-	if id == "" || strings.ContainsAny(id, `/\`) {
+	if !validRunID(id) {
 		return Run{}, fmt.Errorf("无效的运行 ID: %q", id)
 	}
 	data, err := workspace.Read(path.Join("tests", "runs", id, "run.json"))
@@ -219,8 +222,23 @@ func (Store) DeleteDefinition(rel string) error {
 
 // DeleteRun removes an archived run.
 func (Store) DeleteRun(id string) error {
-	if id == "" || strings.ContainsAny(id, `/\`) {
+	if !validRunID(id) {
 		return fmt.Errorf("无效的运行 ID: %q", id)
 	}
 	return workspace.Delete(path.Join("tests", "runs", id))
+}
+
+// validRunID limits IDs to one safe path component. Besides separators, reject
+// dot-only values because path.Join would normalize ".." to the parent folder.
+func validRunID(id string) bool {
+	if id == "" || id == "." || id == ".." || path.Base(id) != id {
+		return false
+	}
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.') {
+			return false
+		}
+	}
+	return true
 }

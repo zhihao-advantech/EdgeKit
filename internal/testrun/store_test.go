@@ -133,4 +133,17 @@ func TestStoreDelete(t *testing.T) {
 	if err := st.DeleteRun("../etc"); err == nil {
 		t.Fatal("should reject run ids with a separator")
 	}
+	if err := st.DeleteRun(".."); err == nil {
+		t.Fatal("should reject a dot-dot run id")
+	}
+	// A rejected traversal must leave definitions and archived runs intact.
+	if _, err := st.WriteDefinition(Definition{Name: "keep"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteRun(".."); err == nil {
+		t.Fatal("should reject a dot-dot run id")
+	}
+	if len(st.ListDefinitions()) != 1 {
+		t.Fatal("invalid run id deleted the tests directory")
+	}
 }
