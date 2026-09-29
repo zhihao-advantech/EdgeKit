@@ -154,6 +154,7 @@ type Server struct {
 	gate  *policy.Gate
 	batch *streamBatcher
 	tests *testManager
+	conns *connectorManager
 
 	mu       sync.Mutex
 	sessions map[string]*deviceSession
@@ -219,6 +220,10 @@ func New() *Server {
 			s.kits.SetEnabled(id, false)
 		}
 	}
+	// External MCP connectors register their tools into the same registry.
+	// They connect in the background so a broken server never blocks startup.
+	s.conns = newConnectorManager(s)
+	s.conns.start()
 	return s
 }
 
@@ -774,6 +779,7 @@ func (s *Server) Close() error {
 	}
 	s.agent.Cancel()
 	s.agent.Close()
+	s.conns.shutdown()
 	runtime.Clear()
 	s.batch.flushAll()
 
@@ -1285,6 +1291,9 @@ func (s *Server) sendStatus(c *client) {
 	s.sendTo(c, "agent.config", s.agent.Config())
 	s.sendTo(c, "settings", loadSettings())
 	s.sendTo(c, "kits", s.kitsPayload())
+	if s.conns != nil {
+		s.sendTo(c, "connectors", map[string]any{"connectors": s.conns.views()})
+	}
 }
 
 // kitView is one kit as the UI sees it.
@@ -1467,6 +1476,12 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.tests.handleDeleteRun(c, msg)
 	case "test.openDir":
 		s.tests.handleOpenDir(c, msg)
+	case "connectors.list":
+		s.conns.handleList(c)
+	case "connectors.setEnabled":
+		s.conns.handleSetEnabled(c, msg)
+	case "connectors.reconnect":
+		s.conns.handleReconnect(c, msg)
 	case "session.close":
 		s.closeSession(msg.SessionID)
 	case "agent.send":

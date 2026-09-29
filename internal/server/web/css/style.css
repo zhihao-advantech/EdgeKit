@@ -692,3 +692,14 @@ button#btn-kits { margin-bottom: 0; }
 .ci-btn:hover { background: var(--accent-soft); color: var(--ink); }
 .def-row { display: flex; align-items: center; gap: 6px; }
 .def-row .btn { flex: 1; }
+
+/* ------------------------- 外部 MCP 连接器 ------------------------- */
+.conn-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.conn-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel);
+}
+.cn-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.cn-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-actions { display: flex; gap: 6px; }
+.cn-err { color: var(--red); }

@@ -336,6 +336,7 @@
       visible: true,
     },
     kits: { kits: [] },
+    connectors: [],
     // Test sessions (TestRun): connect → run → generate → archive.
     tests: new Map(),
     testDefs: { definitions: [], runs: [] },
@@ -759,6 +760,10 @@
         state.kits = msg.payload || { kits: [] };
         updateKitsSummary();
         refreshKitsModal();
+        break;
+      case "connectors":
+        state.connectors = (msg.payload && msg.payload.connectors) || [];
+        refreshConnectorsModal();
         break;
       case "fs.files": onFSFiles(msg.payload || {}); break;
       case "fs.done": onFSDone(msg.payload || {}); break;
@@ -2195,6 +2200,7 @@
       case "agent-inspect": agentAsk("巡检设备状态"); break;
       case "agent-logs": agentAsk("查看系统日志"); break;
       case "kits": showKits(); break;
+      case "connectors": showConnectors(); break;
       case "toggle-sidebar": state.sidebar = !state.sidebar; $("sessions-pane").classList.toggle("hidden", !state.sidebar); break;
       case "toggle-workspace": state.ws.visible = !state.ws.visible; $("workspace").classList.toggle("hidden", !state.ws.visible); $("ws-sides").classList.toggle("hidden", !state.ws.visible); break;
       case "font-inc": setFont(state.fontScale + 0.1); break;
@@ -2305,7 +2311,7 @@
     $("modal-body").innerHTML = html;
     $("modal").classList.add("show");
   }
-  function closeModal() { kitsModalOpen = false; $("modal").classList.remove("show"); }
+  function closeModal() { kitsModalOpen = false; connectorsModalOpen = false; $("modal").classList.remove("show"); }
   function askText(title, placeholder) {
     return new Promise((resolve) => {
       showModal(title, `<div class="modal-form">
@@ -2419,6 +2425,53 @@
     if (!kitsModalOpen) return;
     $("modal-body").innerHTML = kitsHTML();
     wireKitsModal();
+  }
+
+  // ---- External MCP connectors (knowledge bases / RAG, …) ----
+  let connectorsModalOpen = false;
+  function showConnectors() {
+    connectorsModalOpen = true;
+    send("connectors.list", nil);
+    showModal("连接器（MCP）", connectorsHTML());
+    wireConnectorsModal();
+  }
+  function connectorsHTML() {
+    const list = state.connectors || [];
+    const head = '<p class="muted">连接外部 MCP 服务（知识库 / RAG 等），其工具会并入 Agent 与 MCP 工具面。' +
+      '在 <code>~/.config/edgekit/connectors.json</code> 中添加后点「刷新」。</p>' +
+      '<div class="row"><button class="btn small" id="cn-refresh">刷新</button></div>';
+    if (!list.length) {
+      return head + '<p class="muted">暂无连接器。</p>';
+    }
+    const rows = list.map((c) => {
+      const status = c.connected ? `已连接 · ${c.tools} 个工具` : (c.enabled ? "未连接" : "已停用");
+      const err = c.error ? ` · <span class="cn-err">${esc(c.error)}</span>` : "";
+      return `<div class="conn-row">
+        <div class="cn-info"><b>${esc(c.name || c.id)}</b>
+          <small class="muted">${esc(c.id)} · ${esc(c.command)}</small>
+          <small class="muted">${esc(status)}${err}</small></div>
+        <div class="cn-actions">
+          <button class="btn small cn-toggle" data-id="${esc(c.id)}" data-enable="${c.enabled ? "0" : "1"}">${c.enabled ? "停用" : "启用"}</button>
+          <button class="btn small cn-reconnect" data-id="${esc(c.id)}">重连</button>
+        </div>
+      </div>`;
+    }).join("");
+    return head + `<div class="conn-list">${rows}</div>`;
+  }
+  function wireConnectorsModal() {
+    const refresh = $("cn-refresh");
+    if (refresh) refresh.addEventListener("click", () => send("connectors.list", nil));
+    document.querySelectorAll("#modal-body .cn-toggle").forEach((b) => b.addEventListener("click", () => {
+      send("connectors.setEnabled", { id: b.dataset.id, enabled: b.dataset.enable === "1" });
+    }));
+    document.querySelectorAll("#modal-body .cn-reconnect").forEach((b) => b.addEventListener("click", () => {
+      send("connectors.reconnect", { id: b.dataset.id });
+    }));
+  }
+  function refreshConnectorsModal() {
+    if (!connectorsModalOpen) return;
+    $("modal-body").innerHTML = connectorsHTML();
+    wireConnectorsModal();
   }
 
   function showAbout() {
