@@ -54,6 +54,9 @@ func TestStoreRunsHistory(t *testing.T) {
 	if err != nil || got.Name != "demo" {
 		t.Fatalf("read run = %+v, %v", got, err)
 	}
+	if !got.Finished() || got.ArchivedPath != "tests/runs/run-20260101-1" || got.EndedAt.IsZero() {
+		t.Fatalf("archived snapshot is not final: %+v", got)
+	}
 	if _, err := st.ReadRun("../etc/passwd"); err == nil {
 		t.Fatal("run id with a path separator should be rejected")
 	}

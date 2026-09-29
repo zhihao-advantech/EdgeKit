@@ -38,6 +38,17 @@ func (Store) Archive(run *Run) (string, error) {
 		return "", fmt.Errorf("无效的运行 ID: %q", run.ID)
 	}
 	rel := path.Join("tests", "runs", run.ID)
+	// Persist a terminal snapshot, not the intermediate "archive: running"
+	// state supplied by the runner. The caller also updates its in-memory copy
+	// after Archive returns.
+	run.ArchivedPath = rel
+	run.EndedAt = time.Now()
+	if p := run.Phase(PhaseArchive); p != nil {
+		p.Status = StatusPassed
+		p.EndedAt = run.EndedAt
+		p.Summary = "已归档到工作区 " + rel
+		p.Artifact = rel
+	}
 
 	runJSON, err := json.MarshalIndent(run, "", "  ")
 	if err != nil {

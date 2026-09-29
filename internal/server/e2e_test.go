@@ -625,6 +625,13 @@ func TestE2ETestRunPipeline(t *testing.T) {
 	if _, err := workspace.Read(run.ArchivedPath + "/run.json"); err != nil {
 		t.Fatalf("archived run.json unreadable: %v", err)
 	}
+	archived, err := (testrun.Store{}).ReadRun(run.ID)
+	if err != nil {
+		t.Fatalf("read archived run: %v", err)
+	}
+	if !archived.Finished() || archived.ArchivedPath == "" || archived.EndedAt.IsZero() {
+		t.Fatalf("archived run is not final: %+v", archived)
+	}
 }
 
 // TestE2ETestDefinitionsAndHistory covers the workspace-backed definition flow:
