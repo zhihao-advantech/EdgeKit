@@ -14,11 +14,11 @@
       <svg viewBox="0 0 32 32" aria-hidden="true">
         <defs>
           <linearGradient id="ekChip" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#9bd8ff"/>
-            <stop offset="1" stop-color="#3f8fe0"/>
+            <stop offset="0" stop-color="#6aa5ff"/>
+            <stop offset="1" stop-color="#3370ff"/>
           </linearGradient>
         </defs>
-        <g stroke="#79bdf2" stroke-width="1.8" stroke-linecap="round">
+        <g stroke="#5c93ff" stroke-width="1.8" stroke-linecap="round">
           <path d="M10.5 3.5v3M16 3.5v3M21.5 3.5v3M10.5 25.5v3M16 25.5v3M21.5 25.5v3M3.5 10.5h3M3.5 16h3M3.5 21.5h3M25.5 10.5h3M25.5 16h3M25.5 21.5h3"/>
         </g>
         <rect x="6" y="6" width="20" height="20" rx="5.5" fill="url(#ekChip)"/>
@@ -66,6 +66,9 @@
       <div class="sep"></div>
       <div class="mi" data-action="connectors">连接器…</div>
       <div class="mi" data-action="skills">技能…</div>
+      <div class="sep"></div>
+      <div class="mi" data-action="remote-access">远程 Agent 接入（SSH）…</div>
+      <div class="sep"></div>
       <div class="mi" data-action="kits">Kits 管理…</div>
     </div>
   </div>
@@ -238,14 +241,6 @@
       <div class="hint" id="agent-hint">未配置 API Key 时使用 Normal 模式（内置流程）。</div>
       <button class="btn block" id="btn-kits">Kits 管理…</button>
       <div class="hint" id="m-kits">—</div>
-      <div class="pane-subtitle">快捷指令</div>
-      <div class="quick-actions">
-        <button class="btn small" data-agent="巡检设备状态">设备巡检</button>
-        <button class="btn small" data-agent="查看系统日志">系统日志</button>
-        <button class="btn small" data-agent="查看磁盘使用">磁盘</button>
-        <button class="btn small" data-agent="查看内存使用">内存</button>
-        <button class="btn small" data-agent="查看系统版本">系统版本</button>
-      </div>
       <div class="metrics">
         <div class="metric"><span>当前模式</span><b id="m-agent">Normal 模式</b></div>
         <div class="metric"><span>焦点设备</span><b id="m-agent-focus">未选择</b></div>

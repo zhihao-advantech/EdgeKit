@@ -107,6 +107,20 @@ openclaw mcp add edgekit --command edgekit --arg mcp
 openclaw mcp probe edgekit        # 列出可用工具（随设备连接变化）
 ```
 
+#### 局域网内其他设备上的 Agent
+
+内部接口只监听回环且无鉴权，绝不暴露到网络。要让另一台设备上的 Agent 接入本机，
+在本机通过 SSH 运行 stdio 桥接即可——把远端 Agent 的 MCP server 配置为：
+
+```bash
+ssh -o BatchMode=yes user@本机地址 edgekit mcp
+```
+
+MCP 协议走 SSH 通道，EdgeKit 始终只在回环。也可在「工具 → 远程 Agent 接入（SSH）…」
+中填写主机 / 端口 / 用户 / 身份文件，界面会生成上面的命令与可直接粘贴的
+`mcpServers` JSON 配置，一键复制（配置会被记住）。前提：本机 EdgeKit 正在运行，
+远端能用该用户免密 SSH 登录（用密钥；`BatchMode` 不会提示输入密码）。
+
 配置保存在 `~/.config/edgekit/settings.json`（含 API Key，权限 0600）。
 
 ### 测试会话

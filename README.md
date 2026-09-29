@@ -125,6 +125,25 @@ openclaw mcp add edgekit --command edgekit --arg mcp
 openclaw mcp probe edgekit        # lists the tools (varies with connected devices)
 ```
 
+#### Agents on other LAN devices
+
+The internal API listens on loopback only and has no auth, so it is never
+exposed to the network. To let an agent running on another device reach this
+machine, run the stdio bridge **on this machine over SSH** — configure the
+remote agent's MCP server as:
+
+```bash
+ssh -o BatchMode=yes user@this-host edgekit mcp
+```
+
+The MCP protocol then flows over the SSH channel while EdgeKit stays on
+loopback. Under "Tools → Remote agent access (SSH)…" the UI builds this command
+and a ready-to-paste `mcpServers` JSON snippet from the host / port / user /
+identity file, and copies either with one click (the settings are remembered).
+Prerequisite: EdgeKit must be running here, and the remote host must be able to
+log in with that user without a password prompt (use a key; `BatchMode` fails
+instead of asking).
+
 Settings live in `~/.config/edgekit/settings.json` (contains the API key,
 mode 0600).
 

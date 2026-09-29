@@ -339,6 +339,7 @@
     connectors: [],
     skills: [],
     panes: { connectors: false, skills: false },
+    remote: { host: "", port: "22", user: "", key: "", bin: "edgekit" },
     // Test sessions (TestRun): connect → run → generate → archive.
     tests: new Map(),
     testDefs: { definitions: [], runs: [] },
@@ -1271,6 +1272,26 @@
     } else {
       toast("当前环境不支持读取剪贴板");
     }
+  }
+  function copyText(text) {
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => toast("已复制到剪贴板")).catch(() => execCopy(text));
+    } else {
+      execCopy(text);
+    }
+  }
+  // execCopy is the fallback for WebKit builds without the async clipboard API.
+  function execCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:-1000px;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) { /* ignore */ }
+    ta.remove();
+    toast(ok ? "已复制到剪贴板" : "复制失败");
   }
 
   /* ------------------------------------------------------------------ *
@@ -2215,6 +2236,7 @@
       case "kits": showKits(); break;
       case "connectors": openPane("connectors"); break;
       case "skills": openPane("skills"); break;
+      case "remote-access": showRemoteAccess(); break;
       case "toggle-sidebar": state.sidebar = !state.sidebar; $("sessions-pane").classList.toggle("hidden", !state.sidebar); break;
       case "toggle-workspace": state.ws.visible = !state.ws.visible; $("workspace").classList.toggle("hidden", !state.ws.visible); $("ws-sides").classList.toggle("hidden", !state.ws.visible); break;
       case "toggle-connectors": togglePane("connectors", !state.panes.connectors); break;
@@ -2605,6 +2627,81 @@
     $("mcp-skill-refresh").addEventListener("click", () => send("skills.list", nil));
   }
 
+  /* ------------------------------------------------------------------ *
+   * 远程 Agent 接入（局域网 via SSH stdio）
+   * ------------------------------------------------------------------ */
+  // shellJoin renders an argv list as a copy-pasteable shell command.
+  function shellJoin(args) {
+    return args
+      .map((a) => (/^[A-Za-z0-9_@%+=:,./~-]+$/.test(a) ? a : "'" + a.replace(/'/g, "'\\''") + "'"))
+      .join(" ");
+  }
+
+  // remoteAccessArgs builds the `ssh … edgekit mcp` argv an agent on another
+  // device runs to reach this machine's EdgeKit over an SSH stdio channel.
+  function remoteAccessArgs() {
+    const r = state.remote;
+    const args = ["ssh"];
+    if (r.port && r.port !== "22") args.push("-p", r.port);
+    if (r.key) args.push("-i", r.key);
+    args.push("-o", "BatchMode=yes");
+    args.push((r.user ? r.user + "@" : "") + (r.host || "本机IP"));
+    args.push(r.bin || "edgekit", "mcp");
+    return args;
+  }
+
+  function showRemoteAccess() {
+    const r = state.remote;
+    showModal("远程 Agent 接入（SSH）", `
+      <div class="modal-form">
+        <p class="muted">局域网内其他设备上的 Agent 通过 SSH 以 stdio 方式调用本机 EdgeKit；
+        EdgeKit 仍只监听回环地址，无需开放端口，也无需暴露到网络。</p>
+        <div class="grid-2">
+          <label class="field"><span>本机主机（局域网 IP / 域名）</span>
+            <input id="ra-host" value="${esc(r.host)}" placeholder="edgekit-host" autocomplete="off"></label>
+          <label class="field"><span>SSH 端口</span>
+            <input id="ra-port" value="${esc(r.port || "22")}" inputmode="numeric"></label>
+        </div>
+        <label class="field"><span>SSH 用户名</span>
+          <input id="ra-user" value="${esc(r.user)}" placeholder="user" autocomplete="off"></label>
+        <label class="field"><span>身份文件（可选）</span>
+          <input id="ra-key" value="${esc(r.key)}" placeholder="~/.ssh/id_ed25519" autocomplete="off"></label>
+        <label class="field"><span>远端 edgekit 命令（可选）</span>
+          <input id="ra-bin" value="${esc(r.bin || "edgekit")}" placeholder="edgekit" autocomplete="off"></label>
+        <div class="pane-subtitle">SSH 命令</div>
+        <pre class="diff" id="ra-cmd"></pre>
+        <div class="pane-subtitle">MCP 配置（粘贴到远端 Agent）</div>
+        <pre class="diff" id="ra-json"></pre>
+        <div class="hint">前提：本机 EdgeKit 正在运行；远端能用该用户免密 SSH 登录（BatchMode 不会提示输入密码）。</div>
+        <div class="modal-actions">
+          <button class="btn" id="ra-copy-cmd">复制命令</button>
+          <button class="btn primary" id="ra-copy-json">复制配置</button>
+        </div>
+      </div>`);
+    const read = () => {
+      state.remote = {
+        host: $("ra-host").value.trim(),
+        port: $("ra-port").value.trim() || "22",
+        user: $("ra-user").value.trim(),
+        key: $("ra-key").value.trim(),
+        bin: $("ra-bin").value.trim() || "edgekit",
+      };
+    };
+    const render = () => {
+      const args = remoteAccessArgs();
+      $("ra-cmd").textContent = shellJoin(args);
+      $("ra-json").textContent = JSON.stringify(
+        { mcpServers: { edgekit: { command: args[0], args: args.slice(1) } } }, null, 2);
+    };
+    ["ra-host", "ra-port", "ra-user", "ra-key", "ra-bin"].forEach((id) => {
+      $(id).addEventListener("input", () => { read(); render(); });
+      $(id).addEventListener("change", () => { read(); render(); persistSettings(); });
+    });
+    $("ra-copy-cmd").addEventListener("click", () => copyText($("ra-cmd").textContent));
+    $("ra-copy-json").addEventListener("click", () => copyText($("ra-json").textContent));
+    render();
+  }
+
   function showAbout() {
     showModal("关于 EdgeKit", `
       <h4>EdgeKit</h4>
@@ -2656,6 +2753,7 @@
     data["term-hex"] = state.term.hex;
     data["term-echo"] = state.term.echo;
     data["new-kind"] = newKind;
+    data["remote"] = state.remote;
     return data;
   }
   function persistSettings() { send("settings.set", collectSettings()); }
@@ -2680,6 +2778,9 @@
     if (Array.isArray(data["agent-acp-args"])) state.agent.acpArgs = data["agent-acp-args"].map(String);
     if (data["agent-acp-override"] !== undefined) state.agent.acpOverride = !!data["agent-acp-override"];
     if (data["agent-acp-model"] !== undefined) state.agent.acpModel = data["agent-acp-model"] || "";
+    if (data["remote"] && typeof data["remote"] === "object") {
+      state.remote = Object.assign({ host: "", port: "22", user: "", key: "", bin: "edgekit" }, data["remote"]);
+    }
     $("chk-agent-acp-override").checked = state.agent.acpOverride;
     $("sel-agent-backend").value = backendSelectValue();
     $("in-agent-acp-command").value = acpCommandLine();
@@ -2802,9 +2903,6 @@
     });
     $("btn-agent-save").addEventListener("click", saveAgentConfig);
     $("btn-kits").addEventListener("click", showKits);
-    document.querySelectorAll("[data-agent]").forEach((b) => {
-      b.addEventListener("click", () => agentAsk(b.dataset.agent));
-    });
     document.querySelectorAll("#agent-target button").forEach((b) => {
       b.addEventListener("click", () => setAgentTarget(b.dataset.target));
     });
