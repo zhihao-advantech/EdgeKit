@@ -1629,6 +1629,13 @@
     state.testStep = "connect";
     openTestView();
   }
+  // Open the test session from the tab strip: resume the selected run, or an
+  // existing draft, without discarding either.
+  function openTestSession() {
+    if (!state.testDraft) state.testDraft = { name: "测试", checks: [blankCheck()] };
+    if (!state.activeTestId) state.testStep = "connect";
+    openTestView();
+  }
   function openTestView() {
     state.testOpen = true;
     $("tab-test").classList.remove("hidden");
@@ -1845,6 +1852,7 @@
   }
   function setupTest() {
     $("btn-new-test").addEventListener("click", newTest);
+    $("tab-new-test").addEventListener("click", openTestSession);
     $("tab-test").addEventListener("click", () => { if (state.testOpen) activateSession("test"); });
     $("tab-test").querySelector(".tab-x").addEventListener("click", (e) => {
       e.stopPropagation();

@@ -655,3 +655,7 @@ button#btn-kits { margin-bottom: 0; }
   background: #0f1720; color: #d7e3ee; border-radius: 6px;
   font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap;
 }
+.tab.tab-new {
+  font-family: inherit; border-style: dashed; color: var(--ink-dim); background: transparent;
+}
+.tab.tab-new:hover { background: #e9eef4; color: var(--ink); }
