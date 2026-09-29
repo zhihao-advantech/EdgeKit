@@ -127,6 +127,7 @@ type Server struct {
 	kits  *kit.Registry
 	gate  *policy.Gate
 	batch *streamBatcher
+	tests *testManager
 
 	mu       sync.Mutex
 	sessions map[string]*deviceSession
@@ -168,6 +169,7 @@ func New() *Server {
 	s.gate = policy.New(s.onApprovalRequest)
 	s.agent = agent.New(s.kits, s.deps, s.gate, s.onAgentEvent)
 	s.batch = newStreamBatcher(s.emitStream)
+	s.tests = newTestManager(s)
 	// Preload the persisted model config so the agent works even when driven
 	// without the UI (e.g. by an external tool over the WebSocket API).
 	if st := loadSettings(); len(st) > 0 {
@@ -1351,6 +1353,12 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.handleToolsList(c)
 	case "tool.call":
 		s.handleToolCall(c, msg)
+	case "test.new":
+		s.tests.handleNew(c, msg)
+	case "test.phase":
+		s.tests.handlePhase(c, msg)
+	case "test.abort":
+		s.tests.handleAbort(c, msg)
 	case "session.close":
 		s.closeSession(msg.SessionID)
 	case "agent.send":

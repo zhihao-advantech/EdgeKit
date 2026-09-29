@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"edgekit/internal/testrun"
+	"edgekit/internal/workspace"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -42,8 +45,9 @@ type e2eMsg struct {
 // startE2EServer starts a real server (own config dir) and connects a client.
 func startE2EServer(t *testing.T) (*Server, *e2eClient) {
 	t.Helper()
-	// Keep the run hermetic: settings/runtime files land in a temp dir.
+	// Keep the run hermetic: settings/runtime/workspace files land in temp dirs.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	s := New()
 	url, err := s.Start("127.0.0.1:0")
 	if err != nil {
@@ -546,4 +550,79 @@ func TestE2EApprovalDenied(t *testing.T) {
 		t.Fatalf("denied write should be refused, got %+v", res)
 	}
 	expectSilence(t, p, 400*time.Millisecond)
+}
+
+// waitRun waits for the next test.state broadcast and decodes it.
+func (c *e2eClient) waitRun() testrun.Run {
+	c.t.Helper()
+	m := c.until("test.state")
+	var run testrun.Run
+	if err := json.Unmarshal(m.Payload, &run); err != nil {
+		c.t.Fatalf("decode test.state: %v", err)
+	}
+	return run
+}
+
+// TestE2ETestRunPipeline drives a whole test run against a real pty-backed
+// board: connect → run the checks → generate a report → archive to the
+// workspace, all over the protocol the UI uses.
+func TestE2ETestRunPipeline(t *testing.T) {
+	edge, peer := startVirtualSerialPair(t)
+	p := openPeer(t, peer)
+	_, c := startE2EServer(t)
+	id := c.openSerial(t, edge)
+
+	// The device prints a readiness banner.
+	if _, err := p.Write([]byte("READY\n")); err != nil {
+		t.Fatalf("peer write: %v", err)
+	}
+	c.waitSerialEvent(t, id, "READY")
+
+	c.send("test.new", map[string]any{
+		"name": "smoke", "sessionId": id,
+		"definition": map[string]any{
+			"name": "smoke",
+			"checks": []any{
+				map[string]any{"name": "ready", "expect": "READY"},
+				map[string]any{"name": "absent", "expect": "PANIC", "expectNot": true},
+			},
+		},
+	})
+	run := c.waitRun()
+	if run.ID == "" || run.Status != testrun.StatusIdle {
+		t.Fatalf("initial run state: %+v", run)
+	}
+
+	c.send("test.phase", map[string]any{"runId": run.ID, "phase": "all"})
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		run = c.waitRun()
+		if run.Finished() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run did not finish: status=%s", run.Status)
+		}
+	}
+	if run.Status != testrun.StatusPassed {
+		t.Fatalf("run status = %s, want passed (%+v)", run.Status, run.Phases)
+	}
+	for _, ph := range run.Phases {
+		if ph.Status != testrun.StatusPassed {
+			t.Fatalf("phase %s = %s (%s)", ph.Key, ph.Status, ph.Summary)
+		}
+	}
+	if p := run.Phase(testrun.PhaseRun); len(p.Checks) != 2 || p.Checks[0].Status != testrun.CheckPass {
+		t.Fatalf("checks = %+v", p.Checks)
+	}
+	if run.ArchivedPath == "" {
+		t.Fatal("run was not archived")
+	}
+	if _, err := workspace.Read(run.ArchivedPath + "/report.md"); err != nil {
+		t.Fatalf("archived report unreadable: %v", err)
+	}
+	if _, err := workspace.Read(run.ArchivedPath + "/run.json"); err != nil {
+		t.Fatalf("archived run.json unreadable: %v", err)
+	}
 }
