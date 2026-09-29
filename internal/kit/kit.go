@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -139,6 +140,27 @@ const (
 // device kind exists" (e.g. "serial", "ssh"). The host fires it when the
 // first session of the kind appears and when the last one goes away.
 func DeviceKindEvent(kind string) string { return eventDeviceKindPrefix + kind }
+
+// Namespace builds a prefixed tool name for an external provider (e.g. an MCP
+// connector) so remote tool names cannot collide with built-in tools or across
+// providers. Characters outside [A-Za-z0-9_-] become '_'.
+func Namespace(provider, name string) string {
+	return sanitizeIdent(provider) + "_" + sanitizeIdent(name)
+}
+
+// sanitizeIdent keeps only identifier-safe characters.
+func sanitizeIdent(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
 
 /* ------------------------------------------------------------------ *
  * capabilities the built-in kits operate on
@@ -268,6 +290,59 @@ func (r *Registry) Register(k Kit) {
 	}
 }
 
+// Replace registers an external kit, replacing any prior tools for the same
+// kit id and keeping its enabled state. It backs (re)connecting an MCP
+// connector: the tool surface follows the remote server without duplicating the
+// kit entry. A tool name still owned by a *different* kit is skipped.
+func (r *Registry) Replace(k Kit) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id := k.Manifest().ID
+
+	enabled := true
+	found := false
+	kept := r.kits[:0]
+	for _, e := range r.kits {
+		if e.kit.Manifest().ID == id {
+			enabled = e.enabled
+			found = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if found {
+		r.kits = append(kept, &entry{kit: k, enabled: enabled})
+	} else {
+		r.kits = append(r.kits, &entry{kit: k, enabled: enabled})
+	}
+
+	// Drop this kit's previous tools, then re-add the current set.
+	drop := map[string]bool{}
+	for name, te := range r.tools {
+		if te.kitID == id {
+			drop[name] = true
+			delete(r.tools, name)
+		}
+	}
+	if len(drop) > 0 {
+		order := r.order[:0]
+		for _, name := range r.order {
+			if !drop[name] {
+				order = append(order, name)
+			}
+		}
+		r.order = order
+	}
+	for _, t := range k.Tools() {
+		if prev, exists := r.tools[t.Name]; exists {
+			log.Printf("kit %s: tool %q already provided by %s, ignoring", id, t.Name, prev.kitID)
+			continue
+		}
+		r.tools[t.Name] = toolEntry{tool: t, kitID: id}
+		r.order = append(r.order, t.Name)
+	}
+}
+
 // SetEnabled activates or deactivates a kit. It reports whether the kit exists.
 func (r *Registry) SetEnabled(id string, on bool) bool {
 	r.mu.Lock()
@@ -279,6 +354,38 @@ func (r *Registry) SetEnabled(id string, on bool) bool {
 		}
 	}
 	return false
+}
+
+// Remove unregisters a kit and its tools. It is used when an external
+// connector's process dies, so its tools disappear from the surface instead of
+// lingering as dead entries.
+func (r *Registry) Remove(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := r.kits[:0]
+	for _, e := range r.kits {
+		if e.kit.Manifest().ID != id {
+			kept = append(kept, e)
+		}
+	}
+	r.kits = kept
+
+	drop := map[string]bool{}
+	for name, te := range r.tools {
+		if te.kitID == id {
+			drop[name] = true
+			delete(r.tools, name)
+		}
+	}
+	if len(drop) > 0 {
+		order := r.order[:0]
+		for _, name := range r.order {
+			if !drop[name] {
+				order = append(order, name)
+			}
+		}
+		r.order = order
+	}
 }
 
 // IsEnabled reports whether a kit is activated by the user (regardless of its
