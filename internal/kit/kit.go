@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"edgekit/internal/sftpx"
+	"edgekit/internal/testrun"
 	"edgekit/internal/timeline"
 )
 
@@ -192,6 +193,21 @@ type Deps struct {
 	// Sessions returns the open device sessions, so a brain can list them and
 	// address one explicitly. Nil when the host has no directory.
 	Sessions func() []SessionInfo
+	// Test drives the host's test runs (list cases, run one, read a report).
+	Test Test
+}
+
+// Test is the test-run capability: list saved cases and recent runs, run a case
+// against a device session (connect → run → generate → archive), and read a
+// previous run's report.
+type Test interface {
+	Definitions() []testrun.DefinitionRef
+	Runs() []testrun.RunSummary
+	// Run executes the case identified by path (a workspace definition) or def
+	// (an inline definition) on sessionID (empty = focused) to completion.
+	Run(ctx context.Context, sessionID, path string, def *testrun.Definition) (testrun.Run, error)
+	// Report returns the Markdown report of an archived run.
+	Report(runID string) (string, error)
 }
 
 /* ------------------------------------------------------------------ *

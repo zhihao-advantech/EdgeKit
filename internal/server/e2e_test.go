@@ -693,3 +693,43 @@ func TestE2ETestDefinitionsAndHistory(t *testing.T) {
 		t.Fatalf("opened run = %+v", got)
 	}
 }
+
+// TestE2ETestToolRun drives a test run through the tool surface the agent and
+// MCP use (test_run needs approval; test_list is read-only).
+func TestE2ETestToolRun(t *testing.T) {
+	edge, peer := startVirtualSerialPair(t)
+	p := openPeer(t, peer)
+	s, c := startE2EServer(t)
+	ui := c.dialClient(t, s)
+	id := c.openSerial(t, edge)
+
+	if _, err := p.Write([]byte("READY\n")); err != nil {
+		t.Fatalf("peer write: %v", err)
+	}
+	c.waitSerialEvent(t, id, "READY")
+
+	tools := c.tools()
+	for _, want := range []string{"test_run", "test_list", "test_report"} {
+		if !tools[want] {
+			t.Fatalf("tool %s missing once a device is connected: %v", want, tools)
+		}
+	}
+
+	// test_run is mutating: the approval gate must fire, then the run executes.
+	c.send("tool.call", map[string]any{"id": "tr-1", "name": "test_run", "args": map[string]any{
+		"session": id, "name": "smoke", "expect": "READY", "timeout_ms": 2000,
+	}})
+	if tool := ui.approveNext(t, true); tool != "test_run" {
+		t.Fatalf("expected a test_run approval, got %q", tool)
+	}
+	res := c.waitToolResult("tr-1")
+	if !res.OK || !strings.Contains(res.Output, "通过") {
+		t.Fatalf("test_run via tool surface: %+v", res)
+	}
+
+	// The run was archived and shows up in test_list.
+	res = c.toolCall("test_list", nil)
+	if !res.OK || !strings.Contains(res.Output, "已保存的测试定义") {
+		t.Fatalf("test_list: %+v", res)
+	}
+}

@@ -24,6 +24,7 @@ func Builtin(deps kit.Deps) []kit.Kit {
 		codeEditKit{deps.SFTP, deps.SSH},
 		timelineKit{deps.Timeline},
 		sessionsKit{deps.Sessions},
+		testKit{deps.Test},
 	}
 }
 

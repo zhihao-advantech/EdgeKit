@@ -20,7 +20,7 @@ AI Agent、串口调试、SSH 终端、SFTP 工作区文件管理，支持**同�
 - **工作区**：本地沙箱 `~/EdgeKit/workspace` 与远端 SFTP，上传 / 下载 / 在线编辑（单文件 ≤ 16 MiB）。
 - **多板**：可同时连接多块板；`sessions_list` 列出会话，设备工具用 `session` 参数指定目标板。
 - **能力包（Kit）**：`Host` / `Network` / `Serial` / `SSH` / `SFTP` / `Workspace` /
-  `CodeEdit` / `Timeline` / `Sessions`，共 25 个工具；可在「工具 → Kits 管理」启停，
+  `CodeEdit` / `Timeline` / `Sessions` / `Test`，共 28 个工具；可在「工具 → Kits 管理」启停，
   依赖设备的 Kit 在未连接设备时自动隐藏。
 - **MCP**：`edgekit mcp` 把同一套工具暴露给 OpenClaw / Claude Code 等外部 Agent。
 

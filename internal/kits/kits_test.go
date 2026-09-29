@@ -24,11 +24,11 @@ func activateDevices(reg *kit.Registry) {
 func TestBuiltinKitsContributeTools(t *testing.T) {
 	reg := buildRegistry()
 	activateDevices(reg)
-	if got := len(reg.Tools()); got != 25 {
-		t.Fatalf("expected 25 tools from the built-in kits, got %d", got)
+	if got := len(reg.Tools()); got != 28 {
+		t.Fatalf("expected 28 tools from the built-in kits, got %d", got)
 	}
-	if got := len(reg.Manifests()); got != 9 {
-		t.Fatalf("expected 9 kits, got %d", got)
+	if got := len(reg.Manifests()); got != 10 {
+		t.Fatalf("expected 10 kits, got %d", got)
 	}
 }
 
@@ -41,6 +41,7 @@ func TestDeviceKindActivation(t *testing.T) {
 		ssh      = 2
 		sftp     = 4
 		timeline = 1
+		test     = 3
 	)
 	if got := len(reg.Tools()); got != alwaysOn {
 		t.Fatalf("without devices expected %d tools, got %d", alwaysOn, got)
@@ -53,8 +54,8 @@ func TestDeviceKindActivation(t *testing.T) {
 	}
 
 	reg.SetEvent(kit.DeviceKindEvent("serial"), true)
-	if got := len(reg.Tools()); got != alwaysOn+serial+timeline {
-		t.Fatalf("with serial expected %d tools, got %d", alwaysOn+serial+timeline, got)
+	if got := len(reg.Tools()); got != alwaysOn+serial+timeline+test {
+		t.Fatalf("with serial expected %d tools, got %d", alwaysOn+serial+timeline+test, got)
 	}
 	if _, ok := reg.Tool("serial_read"); !ok {
 		t.Fatal("serial tools must appear once a serial session exists")
@@ -64,7 +65,7 @@ func TestDeviceKindActivation(t *testing.T) {
 	}
 
 	reg.SetEvent(kit.DeviceKindEvent("ssh"), true)
-	if got := len(reg.Tools()); got != alwaysOn+serial+ssh+sftp+timeline {
+	if got := len(reg.Tools()); got != alwaysOn+serial+ssh+sftp+timeline+test {
 		t.Fatalf("with serial+ssh expected all tools, got %d", got)
 	}
 
@@ -77,7 +78,7 @@ func TestDeviceKindActivation(t *testing.T) {
 		t.Fatal("ssh tools must stay exposed")
 	}
 	// The manifest is still listed so the UI can show the kit.
-	if got := len(reg.Manifests()); got != 9 {
+	if got := len(reg.Manifests()); got != 10 {
 		t.Fatalf("manifests must stay listed, got %d", got)
 	}
 }
@@ -103,7 +104,7 @@ func TestManifestsAreWellFormed(t *testing.T) {
 func TestToolRiskClassification(t *testing.T) {
 	reg := buildRegistry()
 	activateDevices(reg)
-	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "sftp_download", "workspace_write", "code_patch", "code_deploy", "code_run", "code_revert"}
+	mutating := []string{"local_exec", "serial_write", "serial_exec", "ssh_exec", "sftp_upload", "sftp_download", "workspace_write", "code_patch", "code_deploy", "code_run", "code_revert", "test_run"}
 	for _, name := range mutating {
 		tool, ok := reg.Tool(name)
 		if !ok {
@@ -115,7 +116,8 @@ func TestToolRiskClassification(t *testing.T) {
 	}
 	readOnly := []string{"local_info", "net_ping", "net_check_port", "net_resolve",
 		"serial_status", "serial_read", "ssh_status", "sftp_status", "sftp_list",
-		"workspace_list", "workspace_read", "code_diff", "wait_for_output", "sessions_list"}
+		"workspace_list", "workspace_read", "code_diff", "wait_for_output", "sessions_list",
+		"test_list", "test_report"}
 	for _, name := range readOnly {
 		tool, ok := reg.Tool(name)
 		if !ok {
@@ -142,7 +144,7 @@ func TestRegistryIgnoresDuplicateToolNames(t *testing.T) {
 func TestKitActivation(t *testing.T) {
 	reg := buildRegistry()
 	activateDevices(reg)
-	const all = 25
+	const all = 28
 	if got := len(reg.Tools()); got != all {
 		t.Fatalf("all kits enabled should expose %d tools, got %d", all, got)
 	}

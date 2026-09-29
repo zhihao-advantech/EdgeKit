@@ -28,7 +28,7 @@ talk over a loopback JSON / WebSocket protocol.
 - **Multi-board**: connect several boards at once; `sessions_list` lists the
   sessions and any device tool accepts a `session` argument to pick a board.
 - **Kits** (capability packs): `Host` / `Network` / `Serial` / `SSH` / `SFTP` /
-  `Workspace` / `CodeEdit` / `Timeline` / `Sessions` — 25 tools in total.
+  `Workspace` / `CodeEdit` / `Timeline` / `Sessions` / `Test` — 28 tools in total.
   Enable/disable them under "Tools → Kits"; device-dependent kits stay hidden
   until a matching device is connected.
 - **MCP**: `edgekit mcp` exposes the same tool surface to external agents such

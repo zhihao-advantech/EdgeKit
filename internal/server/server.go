@@ -148,6 +148,9 @@ func New() *Server {
 		sessions: make(map[string]*deviceSession),
 		clients:  make(map[*client]struct{}),
 	}
+	// The test manager is created first so the kits can hold it as the Test
+	// capability (it only needs the server pointer).
+	s.tests = newTestManager(s)
 	// The capability proxies resolve a call's device session from the context
 	// (the shared `session` argument) or fall back to the focused one, so a
 	// tool call always acts on the intended device.
@@ -157,6 +160,7 @@ func New() *Server {
 		SFTP:     focusedSFTP{s},
 		Timeline: focusedTimeline{s},
 		Sessions: s.sessionsDirectory,
+		Test:     s.tests,
 	}
 	s.kits = kit.NewRegistry()
 	for _, k := range kits.Builtin(s.deps) {
@@ -169,7 +173,6 @@ func New() *Server {
 	s.gate = policy.New(s.onApprovalRequest)
 	s.agent = agent.New(s.kits, s.deps, s.gate, s.onAgentEvent)
 	s.batch = newStreamBatcher(s.emitStream)
-	s.tests = newTestManager(s)
 	// Preload the persisted model config so the agent works even when driven
 	// without the UI (e.g. by an external tool over the WebSocket API).
 	if st := loadSettings(); len(st) > 0 {

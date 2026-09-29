@@ -15,6 +15,7 @@ func newTestServer() *Server {
 		sessions: make(map[string]*deviceSession),
 		clients:  make(map[*client]struct{}),
 	}
+	s.tests = newTestManager(s)
 	// Mirror New(): the built-in kits are wired to the server's session
 	// proxies, so tools resolve the focused (or named) device.
 	s.deps = kit.Deps{
@@ -23,6 +24,7 @@ func newTestServer() *Server {
 		SFTP:     focusedSFTP{s},
 		Timeline: focusedTimeline{s},
 		Sessions: s.sessionsDirectory,
+		Test:     s.tests,
 	}
 	s.kits = kit.NewRegistry()
 	for _, k := range kits.Builtin(s.deps) {

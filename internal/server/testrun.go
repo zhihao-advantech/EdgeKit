@@ -210,6 +210,69 @@ func (m *testManager) broadcastDefs() {
 }
 
 /* ------------------------------------------------------------------ *
+ * test capability (consumed by the Test kit / agent / MCP)
+ * ------------------------------------------------------------------ */
+
+// Definitions lists the saved test cases.
+func (m *testManager) Definitions() []testrun.DefinitionRef {
+	return (testrun.Store{}).ListDefinitions()
+}
+
+// Runs lists the archived runs.
+func (m *testManager) Runs() []testrun.RunSummary {
+	return (testrun.Store{}).ListRuns()
+}
+
+// Report returns an archived run's generated report.
+func (m *testManager) Report(runID string) (string, error) {
+	run, err := (testrun.Store{}).ReadRun(runID)
+	if err != nil {
+		return "", err
+	}
+	return run.PhaseOutput(testrun.PhaseGenerate), nil
+}
+
+// Run executes a case to completion on a device session and returns the result.
+func (m *testManager) Run(ctx context.Context, sessionID, path string, def *testrun.Definition) (testrun.Run, error) {
+	var d testrun.Definition
+	switch {
+	case def != nil:
+		d = *def
+	case strings.TrimSpace(path) != "":
+		got, err := (testrun.Store{}).ReadDefinition(path)
+		if err != nil {
+			return testrun.Run{}, err
+		}
+		d = got
+	default:
+		return testrun.Run{}, fmt.Errorf("请提供 path（工作区定义）或内联定义")
+	}
+
+	sid := sessionID
+	if sid == "" {
+		if ds := m.s.session(""); ds != nil {
+			sid = ds.id
+		}
+	}
+	if m.s.session(sid) == nil {
+		return testrun.Run{}, fmt.Errorf("没有可用的设备会话（请先连接串口或 SSH）")
+	}
+
+	name := d.Name
+	if name == "" {
+		name = "测试"
+	}
+	id := m.newID()
+	runner := testrun.New(id, name, sid, d, testDevice{s: m.s, id: sid}, testrun.Store{}, m.onUpdate)
+	m.mu.Lock()
+	m.runs[id] = runner
+	m.mu.Unlock()
+
+	runner.RunAll(ctx)
+	return runner.Snapshot(), nil
+}
+
+/* ------------------------------------------------------------------ *
  * device adapter: drives one session through the host capabilities
  * ------------------------------------------------------------------ */
 

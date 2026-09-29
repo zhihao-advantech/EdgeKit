@@ -118,7 +118,7 @@ WebSocket API：与界面走同一套协议，适合 Agent 直接调用（见第
 
 ## 6. 内置 Agent 工具清单
 
-工具由内置 Kit 提供（Host / Network / Serial / SSH / SFTP / Workspace / CodeEdit / Timeline / Sessions），
+工具由内置 Kit 提供（Host / Network / Serial / SSH / SFTP / Workspace / CodeEdit / Timeline / Sessions / Test），
 可在「工具 → Kits 管理」中启用/禁用；禁用的 Kit 不暴露工具。**依赖设备的 Kit（Serial / SSH /
 SFTP / Timeline）在未连接对应设备会话时同样隐藏**，连接后自动出现——因此调用前先确认设备已连接，
 否则会得到「未知工具」。Agent 在它们之上做 function-calling（只读工具自动执行，**修改性工具默认需用户确认**）：
@@ -140,10 +140,17 @@ SFTP / Timeline）在未连接对应设备会话时同样隐藏**，连接后自
 | `code_deploy` / `code_run` / `code_revert` | 推送文件到板端 / 在板端运行并返回结构化结果 / 回退到备份 | 是 |
 | `wait_for_output` | **阻塞等待**设备输出匹配正则（串口 rx / SSH stdout；默认回看最近 500 条，超时返回最近输出） | 否 |
 | `sessions_list` | 列出所有设备会话（id / 类型 / 状态 / 标签），用于多板寻址 | 否 |
+| `test_list` / `test_report` | 列出已保存的测试定义与历史运行 / 读取某次运行的报告 | 否 |
+| `test_run` | 在目标设备跑一次测试（连接→运行→生成→归档），用 `path` 或 `command`+`expect` | 是 |
 
 **多板寻址**：设备工具（`ssh_exec` / `serial_write` / `serial_exec` / `sftp_*` /
 `wait_for_output` 等）都可带 `session` 参数指定目标会话 id（`sessions_list` 可查），
 不带时作用于当前聚焦会话；传了未知 id 会返回可用列表。
+
+**测试运行**：`test_list` 列出工作区里已保存的测试定义与历史运行；`test_run` 在目标设备上
+跑一次测试（连接 → 运行 → 生成 → 归档，结果落工作区，属修改性操作需审批），可用 `path`
+指定 `tests/*.test.json`，或用 `command`/`expect`/`timeout_ms` 直接一次性检查；
+`test_report` 读取某次归档运行的 Markdown 报告。
 
 未配置模型时，内置 Agent 走 **Normal 模式**（内置流程）：巡检、系统日志、磁盘、内存、进程、系统版本、ping。
 配置模型（OpenAI 兼容）后即可自然语言驱动。
@@ -206,7 +213,7 @@ EdgeKit 也能作为 MCP 工具服务被外部 Agent 调用，工具面与内置
 ```bash
 ./build/edgekit                                          # 先启动 App
 openclaw mcp add edgekit --command "$PWD/build/edgekit" --arg mcp
-openclaw mcp probe edgekit                               # 25 tools
+openclaw mcp probe edgekit                               # 28 tools
 ```
 
 - 传输：stdio（`edgekit mcp`），协议 JSON-RPC 2.0；调用会转发给正在运行的 App
