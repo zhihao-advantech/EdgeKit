@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -44,8 +45,9 @@ var webAssets embed.FS
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	// The listener is bound to loopback and only used by the local webview.
-	CheckOrigin: func(r *http.Request) bool { return true },
+	// The listener is bound to loopback and only used by the local webview and
+	// the stdio MCP bridge (both send no/loopback Origin).
+	CheckOrigin: originAllowed,
 }
 
 // desktopUpgrader carries the RFB byte stream and negotiates the subprotocol
@@ -53,8 +55,28 @@ var upgrader = websocket.Upgrader{
 var desktopUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1 << 16,
 	WriteBufferSize: 1 << 16,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     originAllowed,
 	Subprotocols:    []string{"binary", "base64"},
+}
+
+// originAllowed accepts the embedded WebView (no Origin header, "null", or a
+// loopback origin) and rejects other web origins, so a page opened elsewhere
+// cannot drive the local tool API even if it could reach the port.
+func originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || origin == "null" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // message is the envelope exchanged with the UI.
@@ -73,6 +95,10 @@ type deviceSession struct {
 	ssh    *sshclient.Manager // when kind == "ssh", or the borrowed connection for "desktop"
 	sftp   *sftpx.Manager     // when kind == "ssh"
 	tl     *timeline.Timeline // per-device record (the single source of observations)
+
+	// connected is true from registration and is cleared when the underlying
+	// transport drops unexpectedly, so device kits hide again.
+	connected bool
 
 	sshOwner string        // when kind == "desktop": the SSH session it borrows
 	desktop  *desktopState // when kind == "desktop"
@@ -252,6 +278,7 @@ func (s *Server) nextID(kind string) string {
 
 // registerSession stores ds and notifies clients.
 func (s *Server) registerSession(ds *deviceSession) {
+	ds.connected = true
 	s.mu.Lock()
 	s.sessions[ds.id] = ds
 	s.order = append(s.order, ds.id)
@@ -331,12 +358,15 @@ func (s *Server) closeSession(id string) {
 
 // updateDeviceEvents fires the device-kind activation events: a kit whose
 // capabilities need a device of a kind stays hidden from the agent and MCP
-// until a session of that kind exists, and disappears again when the last one
-// goes away.
+// until a connected session of that kind exists, and disappears again when the
+// last one goes away or drops.
 func (s *Server) updateDeviceEvents() {
 	s.mu.Lock()
 	var serialActive, sshActive bool
 	for _, ds := range s.sessions {
+		if !ds.connected {
+			continue
+		}
 		switch ds.kind {
 		case "serial":
 			serialActive = true
@@ -347,6 +377,30 @@ func (s *Server) updateDeviceEvents() {
 	s.mu.Unlock()
 	s.kits.SetEvent(kit.DeviceKindEvent("serial"), serialActive)
 	s.kits.SetEvent(kit.DeviceKindEvent("ssh"), sshActive)
+}
+
+// markDisconnected clears a session's connection flag when its transport really
+// dropped, then recomputes activation. It is a no-op while the manager still
+// reports the connection alive (e.g. an SSH shell ending but the link up).
+func (s *Server) markDisconnected(id string) {
+	ds := s.session(id)
+	if ds == nil || !ds.connected {
+		return
+	}
+	switch ds.kind {
+	case "serial":
+		if ds.serial != nil && ds.serial.IsOpen() {
+			return
+		}
+	case "ssh", "desktop":
+		if ds.ssh != nil && ds.ssh.IsConnected() {
+			return
+		}
+	}
+	s.mu.Lock()
+	ds.connected = false
+	s.mu.Unlock()
+	s.updateDeviceEvents()
 }
 
 func sessionInfo(ds *deviceSession) map[string]any {
@@ -629,6 +683,13 @@ func (s *Server) Start(addr string) (string, error) {
 	if addr == "" {
 		addr = "127.0.0.1:0"
 	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("无效的监听地址 %q: %w", addr, err)
+	}
+	if !loopbackHost(host) {
+		return "", fmt.Errorf("内部服务只允许绑定回环地址（当前 %q）；远程使用请通过 SSH 隧道", addr)
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return "", fmt.Errorf("listen: %w", err)
@@ -659,6 +720,18 @@ func (s *Server) Start(addr string) (string, error) {
 
 // URL returns the WebSocket endpoint the embedded UI connects to.
 func (s *Server) URL() string { return s.url }
+
+// loopbackHost reports whether a listen host only accepts local connections.
+func loopbackHost(host string) bool {
+	if host == "" {
+		return false // ":port" binds every interface
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 // Page returns the single-file UI (HTML with CSS and JS inlined) ready to be
 // loaded straight into the WebView via SetHtml. wsURL is injected so the page
@@ -1035,12 +1108,20 @@ func (s *Server) onSerialEvent(id string, ev serial.Event) {
 	s.record(id, timeline.Record{Channel: timeline.ChannelSerial, Kind: ev.Direction, Time: ev.Time, Data: ev.Data})
 	batchable := ev.Direction == serial.DirRX || ev.Direction == serial.DirTX
 	s.batch.add("serial", id, ev.Direction, ev.Data, ev.Time, batchable)
+	if ev.Direction == serial.DirError {
+		s.markDisconnected(id)
+	}
 }
 
 func (s *Server) onSSHEvent(id string, ev sshclient.Event) {
 	s.record(id, timeline.Record{Channel: timeline.ChannelSSH, Kind: ev.Kind, Time: ev.Time, Data: ev.Data})
 	batchable := ev.Kind == sshclient.KindStdout || ev.Kind == sshclient.KindStderr
 	s.batch.add("ssh", id, ev.Kind, ev.Data, ev.Time, batchable)
+	if ev.Kind == sshclient.KindClosed || ev.Kind == sshclient.KindError {
+		// Clear activation when the transport is really gone (a shell ending
+		// while the link is up is filtered out inside markDisconnected).
+		s.markDisconnected(id)
+	}
 	if ev.Kind == sshclient.KindClosed {
 		// The transport is gone, so the SFTP subsystem is gone with it.
 		if ds := s.session(id); ds != nil {

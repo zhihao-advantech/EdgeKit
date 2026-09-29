@@ -1,6 +1,7 @@
 package serial
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -30,6 +31,68 @@ func (m *Manager) RunCapture(command string, quiet, timeout time.Duration) (stri
 // so browsing the device directory does not pollute the receive buffer.
 func (m *Manager) RunCaptureSilent(command string, quiet, timeout time.Duration) (string, error) {
 	return m.runCapture(command, quiet, timeout, true)
+}
+
+// RunCaptureSilentUntil sends a command silently and captures until an output
+// marker (marker followed by digits) appears, then waits for a short quiet
+// tail. Unlike RunCaptureSilent, an ordinary pause in script output does not
+// end the capture. Context cancellation and timeout send Ctrl+C best-effort.
+func (m *Manager) RunCaptureSilentUntil(ctx context.Context, command, marker string, quiet, timeout time.Duration) (string, error) {
+	if !m.IsOpen() {
+		return "", fmt.Errorf("串口未打开")
+	}
+	if marker == "" {
+		return "", fmt.Errorf("capture marker 不能为空")
+	}
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	if quiet <= 0 {
+		quiet = 150 * time.Millisecond
+	}
+	markerRe := regexp.MustCompile(regexp.QuoteMeta(marker) + `[0-9]+`)
+
+	m.beginCapture()
+	defer m.endCapture()
+	m.mu.Lock()
+	start := m.rxTotal
+	m.mu.Unlock()
+	if err := m.writeRaw([]byte(command + "\r")); err != nil {
+		return "", err
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	lastTotal := start
+	lastChange := time.Now()
+	markerSeen := false
+	for {
+		select {
+		case <-ctx.Done():
+			_ = m.writeRaw([]byte{0x03})
+			return string(m.captureFrom(start)), ctx.Err()
+		case <-timer.C:
+			_ = m.writeRaw([]byte{0x03})
+			return string(m.captureFrom(start)), fmt.Errorf("串口命令超时（>%s）", timeout)
+		case <-ticker.C:
+			m.mu.Lock()
+			total := m.rxTotal
+			m.mu.Unlock()
+			out := string(m.captureFrom(start))
+			if markerRe.MatchString(out) {
+				markerSeen = true
+			}
+			if total != lastTotal {
+				lastTotal = total
+				lastChange = time.Now()
+			}
+			if markerSeen && time.Since(lastChange) >= quiet {
+				return out, nil
+			}
+		}
+	}
 }
 
 func (m *Manager) runCapture(command string, quiet, timeout time.Duration, silent bool) (string, error) {

@@ -106,7 +106,7 @@ func (k timelineKit) Tools() []kit.Tool {
 				} else {
 					after = 0
 				}
-				f := timeline.Filter{Channels: channels, Kind: kind, Pattern: re, AfterSeq: after}
+				f := timeline.Filter{Channels: channels, Kind: kind, Pattern: re, AfterSeq: after, AfterSeqSet: true}
 				for _, r := range k.tl.Since(ctx, after, 0) {
 					if f.Match(r) {
 						return k.matchedReport(pattern, r), nil

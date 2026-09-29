@@ -4,6 +4,7 @@
 package sshclient
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -325,12 +326,18 @@ const execTimeout = 60 * time.Second
 // output (bounded by maxBytes). An interactive shell session is unaffected. The
 // command is aborted if it runs longer than execTimeout.
 func (m *Manager) ExecCapture(command string, maxBytes int) (string, error) {
-	return m.ExecCaptureTimeout(command, maxBytes, execTimeout)
+	return m.ExecCaptureContext(context.Background(), command, maxBytes, execTimeout)
 }
 
 // ExecCaptureTimeout is ExecCapture with an explicit timeout (used by longer
 // operations such as installing a package on the board).
 func (m *Manager) ExecCaptureTimeout(command string, maxBytes int, timeout time.Duration) (string, error) {
+	return m.ExecCaptureContext(context.Background(), command, maxBytes, timeout)
+}
+
+// ExecCaptureContext is ExecCapture with both a deadline and cancellation.
+// Closing the SSH channel on either condition unblocks the command goroutine.
+func (m *Manager) ExecCaptureContext(ctx context.Context, command string, maxBytes int, timeout time.Duration) (string, error) {
 	m.mu.Lock()
 	if !m.connected || m.client == nil {
 		m.mu.Unlock()
@@ -359,11 +366,16 @@ func (m *Manager) ExecCaptureTimeout(command string, maxBytes int, timeout time.
 	go func() { done <- session.Run(command) }()
 
 	var runErr error
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case runErr = <-done:
-	case <-time.After(timeout):
+	case <-timer.C:
 		_ = session.Close() // unblock Run
-		return "", fmt.Errorf("命令执行超时（>%s）", timeout)
+		return buf.String(), fmt.Errorf("命令执行超时（>%s）", timeout)
+	case <-ctx.Done():
+		_ = session.Close() // unblock Run
+		return buf.String(), ctx.Err()
 	}
 
 	out := buf.String()

@@ -9,7 +9,11 @@
 // still lands on the device timeline.
 package testrun
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Phase keys, in pipeline order.
 const (
@@ -58,6 +62,35 @@ type Definition struct {
 	Name       string  `json:"name"`
 	TargetHint string  `json:"targetHint,omitempty"`
 	Checks     []Check `json:"checks"`
+}
+
+// Validate rejects definitions that could produce a meaningless pass (for
+// example, a completely empty check row).
+func (d Definition) Validate() error {
+	if len(d.Checks) == 0 {
+		return fmt.Errorf("测试定义至少需要一条检查项")
+	}
+	for i, c := range d.Checks {
+		command := strings.TrimSpace(c.Command) != ""
+		script := strings.TrimSpace(c.Script) != ""
+		expect := strings.TrimSpace(c.Expect) != ""
+		if command && script {
+			return fmt.Errorf("检查项 %d 不能同时指定指令和脚本", i+1)
+		}
+		if !command && !script && !expect {
+			return fmt.Errorf("检查项 %d 为空：请填写指令、选择脚本或设置期望输出", i+1)
+		}
+		if c.ExpectNot && !expect {
+			return fmt.Errorf("检查项 %d 启用了反向期望但没有填写期望输出", i+1)
+		}
+		if c.ExitZero && !command && !script {
+			return fmt.Errorf("检查项 %d 要求退出码为 0，但没有指令或脚本", i+1)
+		}
+		if c.TimeoutMS < 0 {
+			return fmt.Errorf("检查项 %d 的超时不能为负数", i+1)
+		}
+	}
+	return nil
 }
 
 // CheckResult is one executed check.

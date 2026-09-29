@@ -3,11 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,6 +77,10 @@ func (m *testManager) handleNew(c *client, msg message) {
 	if p.Definition.Name == "" {
 		p.Definition.Name = name
 	}
+	if err := p.Definition.Validate(); err != nil {
+		m.s.sendError(c, fmt.Errorf("测试定义无效: %w", err))
+		return
+	}
 
 	runner := m.newRunner(name, sid, p.Definition)
 
@@ -93,8 +99,39 @@ func (m *testManager) newRunner(name, sid string, def testrun.Definition) *testr
 	}
 	m.mu.Lock()
 	m.runs[id] = runner
+	m.pruneLocked()
 	m.mu.Unlock()
 	return runner
+}
+
+// maxLiveRuns bounds the in-memory run history; older finished runs are dropped
+// (their archives, if any, stay in the workspace).
+const maxLiveRuns = 30
+
+// pruneLocked drops the oldest finished runs beyond maxLiveRuns. Callers hold
+// m.mu. Only finished runs are pruned, and never the one just created.
+func (m *testManager) pruneLocked() {
+	if len(m.runs) <= maxLiveRuns {
+		return
+	}
+	type item struct {
+		id string
+		at time.Time
+	}
+	var finished []item
+	for id, r := range m.runs {
+		s := r.Snapshot()
+		if s.Finished() {
+			finished = append(finished, item{id: id, at: s.CreatedAt})
+		}
+	}
+	sort.Slice(finished, func(i, j int) bool { return finished[i].at.Before(finished[j].at) })
+	for _, it := range finished {
+		if len(m.runs) <= maxLiveRuns {
+			break
+		}
+		delete(m.runs, it.id)
+	}
 }
 
 // handleBatch runs one case on several device sessions (all connected ones when
@@ -125,6 +162,10 @@ func (m *testManager) handleBatch(c *client, msg message) {
 	}
 	if def.Name == "" {
 		def.Name = "测试"
+	}
+	if err := def.Validate(); err != nil {
+		m.s.sendError(c, fmt.Errorf("测试定义无效: %w", err))
+		return
 	}
 
 	targets := p.Sessions
@@ -324,6 +365,9 @@ func (m *testManager) Run(ctx context.Context, sessionID, path string, def *test
 	default:
 		return testrun.Run{}, fmt.Errorf("请提供 path（工作区定义）或内联定义")
 	}
+	if err := d.Validate(); err != nil {
+		return testrun.Run{}, fmt.Errorf("测试定义无效: %w", err)
+	}
 
 	sid := sessionID
 	if sid == "" {
@@ -369,26 +413,36 @@ func (d testDevice) Info() testrun.Info {
 	return testrun.Info{ID: ds.id, Kind: ds.kind, Label: ds.label, Connected: connected}
 }
 
-func (d testDevice) Exec(ctx context.Context, command string) (string, bool, error) {
+func (d testDevice) Exec(ctx context.Context, command string, timeout time.Duration) (string, bool, error) {
 	ds := d.s.session(d.id)
 	if ds == nil {
 		return "", false, fmt.Errorf("会话不存在: %s", d.id)
 	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 	switch {
 	case ds.ssh != nil && ds.ssh.IsConnected():
-		out, err := ds.ssh.ExecCapture(command, 64*1024)
+		out, err := ds.ssh.ExecCaptureContext(ctx, command, 64*1024, timeout)
 		if err != nil {
 			return out, false, err
 		}
 		// sshclient appends "(exit: ...)" to the output on a non-zero exit.
 		return out, !strings.Contains(out, "(exit:"), nil
 	case ds.serial != nil && ds.serial.IsOpen():
-		// Silent: the test's command and its echo must not pollute the terminal.
-		out, err := ds.serial.RunCaptureSilent(command, 500*time.Millisecond, 8*time.Second)
+		// Serial has no exit-status channel. Append a marker and capture through
+		// it so ExitZero is a real check; keep the command and echo out of the UI.
+		tag := fmt.Sprintf("__EDGEKIT_CMD_%d__", time.Now().UnixNano())
+		wrapped := command + "\nprintf '" + tag + "%s\\n' \"$?\""
+		out, err := ds.serial.RunCaptureSilentUntil(ctx, wrapped, tag, 150*time.Millisecond, timeout)
 		if err != nil {
 			return out, false, err
 		}
-		return out, true, nil
+		code, ok, cleaned := serialExitCode(out, tag)
+		if !ok {
+			return cleanSerialOutput(out), false, fmt.Errorf("串口 shell 未返回退出码标记")
+		}
+		return cleaned, code == 0, nil
 	default:
 		return "", false, fmt.Errorf("会话 %s 未连接", d.id)
 	}
@@ -414,9 +468,10 @@ func (d testDevice) Wait(ctx context.Context, pattern string, timeout time.Durat
 		after = 0
 	}
 	f := timeline.Filter{
-		Channels: []string{timeline.ChannelSerial, timeline.ChannelSSH},
-		Pattern:  re,
-		AfterSeq: after,
+		Channels:    []string{timeline.ChannelSerial, timeline.ChannelSSH},
+		Pattern:     re,
+		AfterSeq:    after,
+		AfterSeqSet: true,
 	}
 	for _, rec := range ds.tl.Since(after, 0) {
 		if f.Match(rec) {
@@ -431,10 +486,51 @@ func (d testDevice) Wait(ctx context.Context, pattern string, timeout time.Durat
 	return string(rec.Data), nil
 }
 
+// WaitAbsent succeeds only when the pattern is absent from recent output and
+// does not arrive during the requested interval.
+func (d testDevice) WaitAbsent(ctx context.Context, pattern string, timeout time.Duration) error {
+	ds := d.s.session(d.id)
+	if ds == nil || ds.tl == nil {
+		return fmt.Errorf("会话不存在: %s", d.id)
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return err
+	}
+	const lookback = 500
+	last := ds.tl.LastSeq()
+	after := last
+	if after > lookback {
+		after -= lookback
+	} else {
+		after = 0
+	}
+	f := timeline.Filter{
+		Channels:    []string{timeline.ChannelSerial, timeline.ChannelSSH},
+		Pattern:     re,
+		AfterSeq:    after,
+		AfterSeqSet: true,
+	}
+	for _, rec := range ds.tl.Since(after, 0) {
+		if f.Match(rec) {
+			return fmt.Errorf("出现了不应匹配的输出: %s", pattern)
+		}
+	}
+	f.AfterSeq = last
+	_, err = ds.tl.Wait(ctx, f, timeout)
+	if errors.Is(err, timeline.ErrTimeout) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("出现了不应匹配的输出: %s", pattern)
+}
+
 // RunScript executes a workspace script (tests/*.sh) on the device. With SSH it
 // uploads the script over SFTP and runs it; on a serial console it feeds the
 // script to the device shell through a heredoc and reads back the exit code.
-func (d testDevice) RunScript(ctx context.Context, script string) (string, bool, error) {
+func (d testDevice) RunScript(ctx context.Context, script string, timeout time.Duration) (string, bool, error) {
 	ds := d.s.session(d.id)
 	if ds == nil {
 		return "", false, fmt.Errorf("会话不存在: %s", d.id)
@@ -447,6 +543,9 @@ func (d testDevice) RunScript(ctx context.Context, script string) (string, bool,
 	if err != nil {
 		return "", false, err
 	}
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
 
 	remote := fmt.Sprintf("/tmp/edgekit-test-%d.sh", time.Now().UnixNano())
 
@@ -455,7 +554,7 @@ func (d testDevice) RunScript(ctx context.Context, script string) (string, bool,
 		if err := ds.sftp.Upload(remote, data); err != nil {
 			return "", false, err
 		}
-		out, err := ds.ssh.ExecCapture("sh "+remote, 64*1024)
+		out, err := ds.ssh.ExecCaptureContext(ctx, "sh "+remote, 64*1024, timeout)
 		_ = ds.sftp.Delete(remote)
 		if err != nil {
 			return out, false, err
@@ -465,21 +564,43 @@ func (d testDevice) RunScript(ctx context.Context, script string) (string, bool,
 
 	// Serial: write the script with a heredoc, then run it and echo the status.
 	if ds.serial != nil && ds.serial.IsOpen() {
-		const tag = "__EDGEKIT_EXIT__"
-		cmd := "cat > " + remote + " <<'EK_SCRIPT_EOF'\n" + string(data) +
-			"\nEK_SCRIPT_EOF\nsh " + remote + "; echo " + tag + "$?"
-		out, err := ds.serial.RunCaptureSilent(cmd, 500*time.Millisecond, 60*time.Second)
+		tag := fmt.Sprintf("__EDGEKIT_SCRIPT_EXIT_%d__", time.Now().UnixNano())
+		delim := fmt.Sprintf("EK_SCRIPT_EOF_%d", time.Now().UnixNano())
+		cmd := "cat > " + remote + " <<'" + delim + "'\n" + string(data) +
+			"\n" + delim + "\nsh " + remote + "\nprintf '" + tag + "%s\\n' \"$?\""
+		out, err := ds.serial.RunCaptureSilentUntil(ctx, cmd, tag, 150*time.Millisecond, timeout)
 		if err != nil {
 			return out, false, err
 		}
-		code := 0
-		if m := regexp.MustCompile(tag + `(\d+)`).FindStringSubmatch(out); m != nil {
-			code, _ = strconv.Atoi(m[1])
+		code, ok, cleaned := serialExitCode(out, tag)
+		if !ok {
+			return cleanSerialOutput(out), false, fmt.Errorf("串口 shell 未返回脚本退出码标记")
 		}
-		return out, code == 0, nil
+		return cleaned, code == 0, nil
 	}
 
 	return "", false, fmt.Errorf("脚本测试需要已连接的 SSH（含 SFTP）或串口会话")
+}
+
+func serialExitCode(output, tag string) (code int, found bool, cleaned string) {
+	re := regexp.MustCompile(regexp.QuoteMeta(tag) + `([0-9]+)`)
+	match := re.FindStringSubmatch(output)
+	if match == nil {
+		return 0, false, cleanSerialOutput(output)
+	}
+	code, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0, false, cleanSerialOutput(output)
+	}
+	output = strings.Replace(output, match[0], "", 1)
+	return code, true, cleanSerialOutput(output)
+}
+
+func cleanSerialOutput(output string) string {
+	output = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`).ReplaceAllString(output, "")
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	output = strings.ReplaceAll(output, "\r", "\n")
+	return strings.TrimRight(output, "\n")
 }
 
 // handleDeleteDef removes a saved test case from the workspace.
@@ -510,7 +631,9 @@ func (m *testManager) handleDeleteRun(c *client, msg message) {
 		return
 	}
 	if runner := m.runner(p.RunID); runner != nil {
-		runner.Abort()
+		// Abandon (not just Abort): the run stops publishing and will not
+		// archive, so a deleted record cannot reappear.
+		runner.Abandon()
 	}
 	// RemoveAll on a missing directory is a no-op, so a run that never archived
 	// is deleted too.

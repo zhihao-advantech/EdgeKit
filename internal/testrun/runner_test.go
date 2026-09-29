@@ -23,11 +23,11 @@ type fakeDevice struct {
 
 func (f *fakeDevice) Info() Info { return f.info }
 
-func (f *fakeDevice) Exec(_ context.Context, command string) (string, bool, error) {
+func (f *fakeDevice) Exec(_ context.Context, command string, _ time.Duration) (string, bool, error) {
 	return f.outputs[command], !f.exitBad[command], nil
 }
 
-func (f *fakeDevice) RunScript(_ context.Context, script string) (string, bool, error) {
+func (f *fakeDevice) RunScript(_ context.Context, script string, _ time.Duration) (string, bool, error) {
 	f.gotScript = script
 	if f.scriptErr != nil {
 		return "", false, f.scriptErr
@@ -40,6 +40,13 @@ func (f *fakeDevice) Wait(_ context.Context, pattern string, _ time.Duration) (s
 		return "matched: " + pattern, nil
 	}
 	return "", fmt.Errorf("timeout")
+}
+
+func (f *fakeDevice) WaitAbsent(_ context.Context, pattern string, _ time.Duration) error {
+	if f.waits[pattern] {
+		return fmt.Errorf("forbidden output appeared")
+	}
+	return nil
 }
 
 type fakeArchiver struct {
@@ -279,5 +286,85 @@ func TestCleanOutput(t *testing.T) {
 		if got := cleanOutput(tc.in); got != tc.want {
 			t.Fatalf("cleanOutput(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestDefinitionValidate(t *testing.T) {
+	cases := []struct {
+		name string
+		def  Definition
+		ok   bool
+	}{
+		{"empty", Definition{}, false},
+		{"empty check", Definition{Checks: []Check{{}}}, false},
+		{"command ok", Definition{Checks: []Check{{Command: "true"}}}, true},
+		{"expect only ok", Definition{Checks: []Check{{Expect: "x"}}}, true},
+		{"script ok", Definition{Checks: []Check{{Script: "tests/a.sh"}}}, true},
+		{"both command and script", Definition{Checks: []Check{{Command: "true", Script: "tests/a.sh"}}}, false},
+		{"expectNot without expect", Definition{Checks: []Check{{Command: "true", ExpectNot: true}}}, false},
+		{"exitZero without runner", Definition{Checks: []Check{{Expect: "x", ExitZero: true}}}, false},
+	}
+	for _, tc := range cases {
+		err := tc.def.Validate()
+		if tc.ok && err != nil {
+			t.Fatalf("%s: unexpected error %v", tc.name, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("%s: expected an error", tc.name)
+		}
+	}
+}
+
+func TestRejectsInvalidDefinitionWithoutRunning(t *testing.T) {
+	dev := connected()
+	arch := &fakeArchiver{}
+	r := New("r-invalid", "bad", "serial-1", Definition{Name: "bad", Checks: []Check{{}}}, dev, arch, nil)
+	r.RunAll(context.Background())
+	run := r.Snapshot()
+	if run.Status != StatusFailed {
+		t.Fatalf("status = %s, want failed", run.Status)
+	}
+	if run.Phase(PhaseRun).Status != StatusFailed {
+		t.Fatalf("run phase = %s", run.Phase(PhaseRun).Status)
+	}
+	// An invalid case fails fast but is still reported and archived for audit.
+	if !arch.called {
+		t.Fatal("failed invalid run should still archive")
+	}
+}
+
+func TestAbandonedRunDoesNotArchive(t *testing.T) {
+	dev := connected()
+	arch := &fakeArchiver{path: "tests/runs/x"}
+	r := New("r-abandon", "gone", "serial-1", Definition{Name: "gone", Checks: []Check{{Command: "true"}}}, dev, arch, nil)
+	r.Abandon()
+	r.RunAll(context.Background())
+	if arch.called {
+		t.Fatal("an abandoned (deleted) run must not archive")
+	}
+}
+
+// blockingDevice blocks Exec until the context is cancelled, to exercise abort.
+type blockingDevice struct{ fakeDevice }
+
+func (b *blockingDevice) Exec(ctx context.Context, command string, _ time.Duration) (string, bool, error) {
+	<-ctx.Done()
+	return "", false, ctx.Err()
+}
+
+func TestAbortMarksAbortedNotPassed(t *testing.T) {
+	dev := &blockingDevice{fakeDevice: *connected()}
+	r := New("r-abort", "slow", "serial-1", Definition{Name: "slow", Checks: []Check{{Command: "sleep 100"}}}, dev, &fakeArchiver{}, nil)
+	done := make(chan struct{})
+	go func() { r.RunAll(context.Background()); close(done) }()
+	time.Sleep(30 * time.Millisecond)
+	r.Abort()
+	<-done
+	run := r.Snapshot()
+	if run.Status != StatusAborted {
+		t.Fatalf("status = %s, want aborted", run.Status)
+	}
+	if run.Phase(PhaseRun).Status != StatusAborted {
+		t.Fatalf("run phase = %s, want aborted", run.Phase(PhaseRun).Status)
 	}
 }

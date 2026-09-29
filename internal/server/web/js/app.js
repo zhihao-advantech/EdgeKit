@@ -1917,8 +1917,18 @@
     document.querySelectorAll("#modal-body .def-pick").forEach((b) => {
       b.addEventListener("click", () => {
         const path = b.dataset.script || "";
-        c.script = path;
-        if (path) c.command = "";
+        if (path) {
+          // Remember the inline command so clearing the script restores it.
+          if (c.command) c._command = c.command;
+          c.script = path;
+          c.command = "";
+        } else {
+          c.script = "";
+          if (c._command) {
+            c.command = c._command;
+            c._command = "";
+          }
+        }
         closeModal();
         renderChecks();
       });
@@ -1927,6 +1937,22 @@
     if (folderBtn) folderBtn.addEventListener("click", openTestsFolder);
     const refreshBtn = $("pick-refresh");
     if (refreshBtn) refreshBtn.addEventListener("click", () => { send("test.defs", nil); setTimeout(() => showScriptPicker(index), 250); });
+  }
+  // stepAllowed mirrors the backend pipeline order so the UI does not offer a
+  // phase that has no prerequisites yet.
+  function stepAllowed(run, key) {
+    const st = (k) => {
+      const p = (run.phases || []).find((x) => x.key === k);
+      return p ? p.status : "pending";
+    };
+    const terminal = (s) => ["passed", "failed", "skipped"].includes(s);
+    switch (key) {
+      case "connect": return true;
+      case "run": return st("connect") === "passed";
+      case "generate": return terminal(st("connect"));
+      case "archive": return terminal(st("generate"));
+      default: return false;
+    }
   }
   function renderStepper(run) {
     const ol = $("test-stepper");
@@ -1937,7 +1963,8 @@
       const li = document.createElement("li");
       li.className = "step " + status + (state.testStep === ph.key ? " active" : "");
       const summary = ps && ps.summary ? ps.summary : ph.hint;
-      const runBtn = run && status === "pending" ? `<button class="btn small step-run">执行</button>` : "";
+      const runBtn = run && status === "pending" && stepAllowed(run, ph.key)
+        ? `<button class="btn small step-run">执行</button>` : "";
       li.innerHTML = `<span class="step-dot"></span>
         <span class="step-main"><b>${esc(ph.label)}</b><small>${esc(summary)}</small></span>${runBtn}`;
       li.addEventListener("click", (e) => {
@@ -1978,9 +2005,25 @@
   function checkLabel(status) {
     return status === "pass" ? "通过" : status === "fail" ? "失败" : status === "skip" ? "跳过" : status;
   }
+  // draftError mirrors the backend definition validation for instant feedback.
+  function draftError(def) {
+    if (!def.checks.length) return "至少需要一条检查项";
+    for (let i = 0; i < def.checks.length; i++) {
+      const c = def.checks[i];
+      const hasCmd = (c.command || "").trim() !== "";
+      const hasScript = (c.script || "").trim() !== "";
+      const hasExpect = (c.expect || "").trim() !== "";
+      if (hasCmd && hasScript) return `检查项 ${i + 1} 不能同时填写指令和脚本`;
+      if (!hasCmd && !hasScript && !hasExpect) return `检查项 ${i + 1} 为空：请填写指令、选择脚本或设置期望输出`;
+      if (c.expectNot && !hasExpect) return `检查项 ${i + 1} 启用了反向期望但没有期望输出`;
+      if (c.exitZero && !hasCmd && !hasScript) return `检查项 ${i + 1} 要求退出码为 0，但没有指令或脚本`;
+    }
+    return "";
+  }
   function startTest() {
     const def = draftToDef();
-    if (!def.checks.length) { toast("请至少添加一条检查"); return; }
+    const bad = draftError(def);
+    if (bad) { toast(bad); return; }
     const sid = $("test-target").value;
     if (!sid) { toast("请先选择目标设备会话"); return; }
     if (sid === "__all__") {

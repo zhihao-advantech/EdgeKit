@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"edgekit/internal/serial"
 	"edgekit/internal/testrun"
 	"edgekit/internal/workspace"
 
@@ -583,8 +584,8 @@ func TestE2ETestRunPipeline(t *testing.T) {
 		"definition": map[string]any{
 			"name": "smoke",
 			"checks": []any{
-				map[string]any{"name": "ready", "expect": "READY"},
-				map[string]any{"name": "absent", "expect": "PANIC", "expectNot": true},
+				map[string]any{"name": "ready", "expect": "READY", "timeoutMs": 2000},
+				map[string]any{"name": "absent", "expect": "PANIC", "expectNot": true, "timeoutMs": 300},
 			},
 		},
 	})
@@ -919,5 +920,35 @@ func TestE2ETestDeleteLiveRun(t *testing.T) {
 	}
 	if _, err := (testrun.Store{}).ReadRun(created.RunID); err == nil {
 		t.Fatal("live run should no longer be readable")
+	}
+}
+
+// TestStartRejectsNonLoopback ensures the internal service never listens on a
+// public interface.
+func TestStartRejectsNonLoopback(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	s := New()
+	t.Cleanup(func() { _ = s.Close() })
+	if _, err := s.Start("0.0.0.0:0"); err == nil {
+		t.Fatal("binding to all interfaces must be rejected")
+	}
+	if _, err := s.Start("[::]:0"); err == nil {
+		t.Fatal("binding to all interfaces (v6) must be rejected")
+	}
+}
+
+// TestMarkDisconnectedHidesKit checks a dropped device session hides its kits
+// again (the activation no longer depends only on session existence).
+func TestMarkDisconnectedHidesKit(t *testing.T) {
+	s := newTestServer()
+	ds := &deviceSession{id: "serial-1", kind: "serial", label: "ttyUSB0", serial: serial.New(nil)}
+	s.registerSession(ds)
+	if _, ok := s.kits.Tool("serial_read"); !ok {
+		t.Fatal("serial kit should be active after registering a session")
+	}
+	// The manager is not open, so a disconnect event clears the flag.
+	s.markDisconnected("serial-1")
+	if _, ok := s.kits.Tool("serial_read"); ok {
+		t.Fatal("serial kit should hide once the session is disconnected")
 	}
 }

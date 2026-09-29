@@ -41,7 +41,10 @@ type Filter struct {
 	Channels []string
 	Kind     string
 	AfterSeq uint64
-	Pattern  *regexp.Regexp // matched against Data
+	// AfterSeqSet distinguishes an explicit sequence zero (scan from the
+	// beginning) from the zero value (start at the current tail).
+	AfterSeqSet bool
+	Pattern     *regexp.Regexp // matched against Data
 }
 
 // Match reports whether r passes the filter.
@@ -161,7 +164,7 @@ func (t *Timeline) Since(after uint64, limit int) []Record {
 // Wait blocks until a record matching f arrives (only records newer than the
 // sequence at call time are considered), the timeout elapses, or ctx is done.
 func (t *Timeline) Wait(ctx context.Context, f Filter, timeout time.Duration) (Record, error) {
-	if f.AfterSeq == 0 {
+	if !f.AfterSeqSet && f.AfterSeq == 0 {
 		f.AfterSeq = t.LastSeq()
 	}
 	deadline := time.Now().Add(timeout)

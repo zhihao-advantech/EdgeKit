@@ -24,12 +24,14 @@ type Device interface {
 	Info() Info
 	// Exec runs a command on the device and reports the output and whether it
 	// exited successfully.
-	Exec(ctx context.Context, command string) (output string, exitOK bool, err error)
+	Exec(ctx context.Context, command string, timeout time.Duration) (output string, exitOK bool, err error)
 	// Wait blocks until pattern (a regexp) appears in the device output.
 	Wait(ctx context.Context, pattern string, timeout time.Duration) (matched string, err error)
+	// WaitAbsent succeeds only when pattern stays absent for timeout.
+	WaitAbsent(ctx context.Context, pattern string, timeout time.Duration) error
 	// RunScript runs a workspace script (tests/*.sh) on the device and reports
 	// its output and whether it exited successfully.
-	RunScript(ctx context.Context, script string) (output string, exitOK bool, err error)
+	RunScript(ctx context.Context, script string, timeout time.Duration) (output string, exitOK bool, err error)
 }
 
 // Archiver persists a finished run. It returns a workspace-relative path.
@@ -40,14 +42,15 @@ type Archiver interface {
 // Runner executes one Run against one Device, publishing state after every
 // change so the UI (and later an agent) can follow along.
 type Runner struct {
-	mu       sync.Mutex
-	run      Run
-	dev      Device
-	store    Archiver
-	prev     *Run // previous run of the same name, for the report comparison
-	onUpdate func(Run)
-	cancel   context.CancelFunc
-	busy     bool
+	mu        sync.Mutex
+	run       Run
+	dev       Device
+	store     Archiver
+	prev      *Run // previous run of the same name, for the report comparison
+	onUpdate  func(Run)
+	cancel    context.CancelFunc
+	busy      bool
+	abandoned bool // deleted: stop publishing and never archive
 }
 
 // New creates a runner for def bound to dev.
@@ -80,11 +83,33 @@ func (r *Runner) snapshotLocked() Run {
 
 func (r *Runner) update() {
 	r.mu.Lock()
+	if r.abandoned {
+		r.mu.Unlock()
+		return
+	}
 	snap := r.snapshotLocked()
 	r.mu.Unlock()
 	if r.onUpdate != nil {
 		r.onUpdate(snap)
 	}
+}
+
+// Abandon marks the run as deleted. It stops publishing and prevents a late
+// archive, so a deleted run cannot reappear in the UI or on disk.
+func (r *Runner) Abandon() {
+	r.mu.Lock()
+	r.abandoned = true
+	cancel := r.cancel
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (r *Runner) isAbandoned() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.abandoned
 }
 
 // Abort cancels a running phase (no-op when idle).
@@ -97,6 +122,27 @@ func (r *Runner) Abort() {
 	}
 }
 
+// markAborted records a cancelled run: the verdict is preserved if the run
+// phase already produced one, otherwise the run is marked aborted and any
+// still-running phase is closed out.
+func (r *Runner) markAborted() {
+	r.mu.Lock()
+	if r.run.Status != StatusPassed && r.run.Status != StatusFailed {
+		r.run.Status = StatusAborted
+	}
+	for i := range r.run.Phases {
+		if r.run.Phases[i].Status == StatusRunning {
+			r.run.Phases[i].Status = StatusAborted
+			r.run.Phases[i].EndedAt = time.Now()
+			if r.run.Phases[i].Summary == "" {
+				r.run.Phases[i].Summary = "已中止"
+			}
+		}
+	}
+	r.mu.Unlock()
+	r.update()
+}
+
 // Running reports whether a phase is currently executing.
 func (r *Runner) Running() bool {
 	r.mu.Lock()
@@ -107,6 +153,10 @@ func (r *Runner) Running() bool {
 // RunPhase executes one phase of the pipeline.
 func (r *Runner) RunPhase(ctx context.Context, key string) error {
 	r.mu.Lock()
+	if r.abandoned {
+		r.mu.Unlock()
+		return fmt.Errorf("测试已删除")
+	}
 	if r.busy {
 		r.mu.Unlock()
 		return fmt.Errorf("测试正在运行中")
@@ -114,6 +164,10 @@ func (r *Runner) RunPhase(ctx context.Context, key string) error {
 	if r.run.Phase(key) == nil {
 		r.mu.Unlock()
 		return fmt.Errorf("未知阶段: %s", key)
+	}
+	if err := r.prereqLocked(key); err != nil {
+		r.mu.Unlock()
+		return err
 	}
 	if r.run.CreatedAt.IsZero() {
 		r.run.CreatedAt = time.Now()
@@ -142,20 +196,62 @@ func (r *Runner) RunPhase(ctx context.Context, key string) error {
 	return nil
 }
 
+// prereqLocked enforces the pipeline order so a later phase cannot be run on an
+// empty run (e.g. archiving before anything ran). Callers hold r.mu.
+func (r *Runner) prereqLocked(key string) error {
+	done := func(k string) bool {
+		st := r.phaseStatusLocked(k)
+		return st == StatusPassed || st == StatusFailed || st == StatusSkipped
+	}
+	switch key {
+	case PhaseConnect:
+		return nil
+	case PhaseRun:
+		if r.phaseStatusLocked(PhaseConnect) != StatusPassed {
+			return fmt.Errorf("请先完成「连接」")
+		}
+	case PhaseGenerate:
+		if !done(PhaseConnect) {
+			return fmt.Errorf("请先完成「连接」")
+		}
+	case PhaseArchive:
+		if !done(PhaseGenerate) {
+			return fmt.Errorf("请先完成「生成」")
+		}
+	}
+	return nil
+}
+
+func (r *Runner) phaseStatusLocked(key string) string {
+	if p := r.run.Phase(key); p != nil {
+		return p.Status
+	}
+	return ""
+}
+
 // RunAll drives the whole pipeline: connect, run the checks, generate a report
-// and archive. Run failures do not stop the later phases, so a failed test is
-// still reported and archived.
+// and archive. A failed run still gets a report and an archive; a cancelled or
+// deleted run stops as soon as the current phase observes it.
 func (r *Runner) RunAll(ctx context.Context) {
-	if err := r.RunPhase(ctx, PhaseConnect); err != nil {
-		return
+	for _, key := range PhaseKeys {
+		if r.isAbandoned() || ctx.Err() != nil {
+			r.markAborted()
+			return
+		}
+		if key == PhaseRun && r.phaseStatus(PhaseConnect) != StatusPassed {
+			r.skipChecks("连接未通过，已跳过运行")
+			continue
+		}
+		if err := r.RunPhase(ctx, key); err != nil {
+			if ctx.Err() != nil || r.isAbandoned() {
+				r.markAborted()
+			}
+			return
+		}
 	}
-	if r.phaseStatus(PhaseConnect) == StatusPassed {
-		_ = r.RunPhase(ctx, PhaseRun)
-	} else {
-		r.skipChecks("连接未通过，已跳过运行")
+	if ctx.Err() != nil {
+		r.markAborted()
 	}
-	_ = r.RunPhase(ctx, PhaseGenerate)
-	_ = r.RunPhase(ctx, PhaseArchive)
 }
 
 func (r *Runner) phaseStatus(key string) string {
@@ -232,7 +328,29 @@ func (r *Runner) execConnect(ctx context.Context) {
 
 func (r *Runner) execRun(ctx context.Context) {
 	r.beginPhase(PhaseRun)
+	if err := r.run.Definition.Validate(); err != nil {
+		r.mu.Lock()
+		r.run.Status = StatusFailed
+		r.mu.Unlock()
+		r.endPhase(PhaseRun, StatusFailed, "测试定义无效："+err.Error(), "", "")
+		return
+	}
 	results := r.runChecks(ctx)
+
+	// A cancelled run is aborted, not failed: partial checks must not turn a
+	// user abort into a red verdict.
+	if ctx.Err() != nil {
+		r.mu.Lock()
+		if p := r.run.Phase(PhaseRun); p != nil {
+			p.Checks = results
+		}
+		if r.run.Status != StatusPassed && r.run.Status != StatusFailed {
+			r.run.Status = StatusAborted
+		}
+		r.mu.Unlock()
+		r.endPhase(PhaseRun, StatusAborted, "已中止", "", "")
+		return
+	}
 
 	failed := 0
 	for _, res := range results {
@@ -291,13 +409,13 @@ func (r *Runner) runCheck(ctx context.Context, i int, c Check) CheckResult {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	var out string
 	switch {
 	case strings.TrimSpace(c.Script) != "":
-		cctx, cancel := context.WithTimeout(ctx, timeout)
-		o, exitOK, err := r.dev.RunScript(cctx, c.Script)
-		cancel()
+		o, exitOK, err := r.dev.RunScript(cctx, c.Script, timeout)
 		out = o
 		if err != nil {
 			res.Status, res.Err, res.Output = CheckFail, err.Error(), truncate(cleanOutput(out))
@@ -308,7 +426,7 @@ func (r *Runner) runCheck(ctx context.Context, i int, c Check) CheckResult {
 			return res
 		}
 	case strings.TrimSpace(c.Command) != "":
-		o, exitOK, err := r.dev.Exec(ctx, c.Command)
+		o, exitOK, err := r.dev.Exec(cctx, c.Command, timeout)
 		out = o
 		if err != nil {
 			res.Status, res.Err, res.Output = CheckFail, err.Error(), truncate(cleanOutput(out))
@@ -331,10 +449,14 @@ func (r *Runner) runCheck(ctx context.Context, i int, c Check) CheckResult {
 				res.Status, res.Err, res.Output = CheckFail, "输出不应匹配: "+c.Expect, truncate(cleanOutput(out))
 				return res
 			}
+			if err := r.dev.WaitAbsent(cctx, c.Expect, timeout); err != nil {
+				res.Status, res.Err, res.Output = CheckFail, "禁用输出出现或等待被中断: "+c.Expect, truncate(cleanOutput(out))
+				return res
+			}
 		} else if !re.MatchString(out) {
 			// The command's own output missed it; wait on the device timeline
 			// (streaming consoles) before giving up.
-			matched, werr := r.dev.Wait(ctx, c.Expect, timeout)
+			matched, werr := r.dev.Wait(cctx, c.Expect, timeout)
 			if werr != nil {
 				res.Status, res.Err, res.Output = CheckFail, "未在超时内匹配: "+c.Expect, truncate(cleanOutput(out))
 				return res
@@ -363,12 +485,21 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:
 
 func (r *Runner) execGenerate(ctx context.Context) {
 	r.beginPhase(PhaseGenerate)
+	if ctx.Err() != nil || r.isAbandoned() {
+		r.endPhase(PhaseGenerate, StatusSkipped, "已中止", "", "")
+		return
+	}
 	report := r.buildReport()
 	r.endPhase(PhaseGenerate, StatusPassed, "已生成测试报告", report, "")
 }
 
 func (r *Runner) execArchive(ctx context.Context) {
 	r.beginPhase(PhaseArchive)
+	// A deleted run must never write its archive (it would reappear on disk).
+	if r.isAbandoned() {
+		r.endPhase(PhaseArchive, StatusSkipped, "测试已删除，未归档", "", "")
+		return
+	}
 	if r.store == nil {
 		r.endPhase(PhaseArchive, StatusSkipped, "未配置归档器", "", "")
 		return
