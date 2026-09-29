@@ -121,7 +121,7 @@ WebSocket API：与界面走同一套协议，适合 Agent 直接调用（见第
 工具由内置 Kit 提供（Host / Network / Serial / SSH / SFTP / Workspace / CodeEdit / Timeline / Sessions / Test），
 可在「工具 → Kits 管理」中启用/禁用；禁用的 Kit 不暴露工具。**依赖设备的 Kit（Serial / SSH /
 SFTP / Timeline）在未连接对应设备会话时同样隐藏**，连接后自动出现——因此调用前先确认设备已连接，
-否则会得到「未知工具」。Agent 在它们之上做 function-calling（只读工具自动执行，**修改性工具默认需用户确认**）：
+否则会得到「未知工具」。Agent 在它们之上做 function-calling（只读工具自动执行，**修改性工具默认需用户确认**；`dangerous` 与外部连接器工具始终需确认）：
 
 | 工具 | 作用 | 修改性 |
 | --- | --- | --- |
@@ -152,6 +152,12 @@ SFTP / Timeline）在未连接对应设备会话时同样隐藏**，连接后自
 `path` 指定 `tests/*.test.json`；`script` 运行工作区脚本 `tests/*.sh`（SSH 经 SFTP 上传执行，
 串口用 heredoc）；或 `command`/`expect`/`timeout_ms`/`exit_zero` 直接一次性检查。
 `test_report` 读取某次归档运行的 Markdown 报告。
+
+**外部 MCP 连接器**：EdgeKit 可作为 MCP **客户端**挂载外部 MCP 服务（知识库 / RAG 等），
+其工具以 `<连接器id>_<远端工具名>` 并入同一工具面（示例：`kb_search`）。在
+「工具 → 连接器（MCP）」中连接 / 停用 / 重连；配置见 `~/.config/edgekit/connectors.json`。
+外部工具**默认按修改性处理且不随「自动执行」放行**，一律逐次审批；连接后会触发
+`notifications/tools/list_changed`，MCP 客户端应重新拉取工具列表。
 
 未配置模型时，内置 Agent 走 **Normal 模式**（内置流程）：巡检、系统日志、磁盘、内存、进程、系统版本、ping。
 配置模型（OpenAI 兼容）后即可自然语言驱动。

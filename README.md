@@ -33,6 +33,10 @@ talk over a loopback JSON / WebSocket protocol.
   until a matching device is connected.
 - **MCP**: `edgekit mcp` exposes the same tool surface to external agents such
   as OpenClaw and Claude Code.
+- **Connectors (external MCP)**: acts as an MCP **client** to attach external
+  MCP servers (knowledge bases / RAG, …); their tools join the same surface
+  (namespaced by connector) and are managed under
+  "Tools → Connectors (MCP)" (connect / disable / reconnect).
 
 ## Requirements
 
@@ -155,7 +159,7 @@ cmd/edgekit/            entry point (WebView + server startup)
 internal/server/        HTTP + WebSocket service and embedded frontend assets
 internal/kit/ kits/     Kit model and built-in capability packs
 internal/agent/         AI agent (built-in / ACP)
-internal/{serial,sshclient,sftpx,workspace,timeline,policy,mcp,acp,netdiag}/
+internal/{serial,sshclient,sftpx,workspace,timeline,policy,mcp,mcpclient,acp,netdiag}/
 packaging/              .deb / .run scripts and dependency check
 third_party/webview_go/ webview fork with WebKit 4.0/4.1 build tags
 ```
@@ -164,8 +168,29 @@ third_party/webview_go/ webview fork with WebKit 4.0/4.1 build tags
 
 - SSH host keys are not verified, only fingerprinted; do not use on untrusted
   networks.
-- The internal WebSocket listens on loopback only, never on the LAN.
+- The internal WebSocket listens on loopback only, never on the LAN (`-addr`
+  also rejects non-loopback addresses).
 - Mutating tools ask for confirmation each time; enable "auto-run" with care.
+- `dangerous` tools **always** require manual confirmation, and **external
+  connector tools never auto-run** — they are always approved per call, with a
+  connector-prefixed tool name so they cannot be confused with built-ins.
+
+### External MCP connectors
+
+Declare external MCP servers in `~/.config/edgekit/connectors.json`, then restart
+or refresh under "Tools → Connectors (MCP)":
+
+```json
+{
+  "servers": [
+    { "id": "kb", "name": "Knowledge base", "command": "kb-mcp",
+      "args": ["--index", "/data/kb"], "enabled": true, "risk": "read" }
+  ]
+}
+```
+
+`risk` defaults to `mutate` (approval-gated); external tools are named
+`kb_<remote-tool>` and appear/disappear as the connector connects.
 
 ## License
 

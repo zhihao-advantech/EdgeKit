@@ -23,6 +23,8 @@ AI Agent、串口调试、SSH 终端、SFTP 工作区文件管理，支持**同�
   `CodeEdit` / `Timeline` / `Sessions` / `Test`，共 28 个工具；可在「工具 → Kits 管理」启停，
   依赖设备的 Kit 在未连接设备时自动隐藏。
 - **MCP**：`edgekit mcp` 把同一套工具暴露给 OpenClaw / Claude Code 等外部 Agent。
+- **连接器（外部 MCP）**：作为 MCP **客户端**连接外部 MCP 服务（知识库 / RAG 等），
+  其工具并入同一工具面（名称加连接器前缀），在「工具 → 连接器（MCP）」中连接 / 停用 / 重连。
 
 ## 环境要求
 
@@ -130,7 +132,7 @@ cmd/edgekit/            程序入口（WebView + 服务启动）
 internal/server/        HTTP + WebSocket 服务与内嵌前端资源
 internal/kit/ kits/     Kit 模型与内置能力包
 internal/agent/         AI Agent（内置 / ACP）
-internal/{serial,sshclient,sftpx,workspace,timeline,policy,mcp,acp,netdiag}/
+internal/{serial,sshclient,sftpx,workspace,timeline,policy,mcp,mcpclient,acp,netdiag}/
 packaging/              .deb / .run 打包脚本与依赖检查
 third_party/webview_go/ WebKit 4.0/4.1 build tag 的 webview fork
 ```
@@ -138,8 +140,26 @@ third_party/webview_go/ WebKit 4.0/4.1 build tag 的 webview fork
 ## 安全说明
 
 - SSH 主机密钥不做校验，仅打印指纹；请勿用于不可信网络。
-- 内部 WebSocket 仅监听回环地址，不对局域网开放。
+- 内部 WebSocket 仅监听回环地址，不对局域网开放（`-addr` 也拒绝非回环地址）。
 - 修改性工具默认逐次确认；「自动执行」请谨慎开启。
+- `dangerous` 级别工具**始终**需要手动确认；**外部连接器的工具不随「自动执行」放行**，
+  一律逐次审批，且工具名统一加连接器前缀避免与内置工具混淆。
+
+### 外部 MCP 连接器
+
+在 `~/.config/edgekit/connectors.json` 中声明外部 MCP 服务，重启或在
+「工具 → 连接器（MCP）」中刷新即可挂载：
+
+```json
+{
+  "servers": [
+    { "id": "kb", "name": "知识库", "command": "kb-mcp",
+      "args": ["--index", "/data/kb"], "enabled": true, "risk": "read" }
+  ]
+}
+```
+
+`risk` 缺省为 `mutate`（需审批）；外部工具名为 `kb_<远端工具名>`，随连接/断开动态出现与消失。
 
 ## 许可证
 
