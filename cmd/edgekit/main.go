@@ -73,6 +73,9 @@ func main() {
 
 	w := webview.New(*debug)
 	if w == nil {
+		if runtime.GOOS == "windows" {
+			log.Fatal("创建窗口失败：请确认已安装 WebView2 Runtime（Win10/11 一般自带）")
+		}
 		log.Fatal("创建窗口失败：请确认已安装 libwebkit2gtk-4.0-37 与 libgtk-3-0，并在图形环境下运行")
 	}
 	defer w.Destroy()

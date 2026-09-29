@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -420,15 +421,21 @@ func (m *Manager) runLocal(ctx context.Context, text string) {
 	case hasAny(lower, "巡检", "体检", "检查", "状态", "inspect", "check", "status"):
 		m.localInspect(ctx, target)
 	case hasAny(lower, "日志", "log", "dmesg", "journal"):
-		m.localRun(ctx, target, "系统日志", "dmesg 2>/dev/null | tail -n 50 || journalctl -n 50 --no-pager")
+		m.localRun(ctx, target, "系统日志",
+			"dmesg 2>/dev/null | tail -n 50 || journalctl -n 50 --no-pager",
+			`powershell -NoProfile -Command "Get-WinEvent -LogName System -MaxEvents 50 | Format-Table TimeCreated,LevelDisplayName -AutoSize"`)
 	case hasAny(lower, "磁盘", "空间", "df"):
-		m.localRun(ctx, target, "磁盘使用", "df -h")
+		m.localRun(ctx, target, "磁盘使用", "df -h",
+			`powershell -NoProfile -Command "Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize"`)
 	case hasAny(lower, "内存", "free", "mem"):
-		m.localRun(ctx, target, "内存使用", "free -m")
+		m.localRun(ctx, target, "内存使用", "free -m",
+			`powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory"`)
 	case hasAny(lower, "进程", "process", "ps", "top"):
-		m.localRun(ctx, target, "进程负载", "ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 15")
+		m.localRun(ctx, target, "进程负载", "ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 15",
+			`powershell -NoProfile -Command "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Id,ProcessName,CPU,WS | Format-Table -AutoSize"`)
 	case hasAny(lower, "版本", "系统", "uname", "os", "内核"):
-		m.localRun(ctx, target, "系统版本", "uname -a; (cat /etc/os-release 2>/dev/null | head -n 5)")
+		m.localRun(ctx, target, "系统版本", "uname -a; (cat /etc/os-release 2>/dev/null | head -n 5)",
+			`powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,OSArchitecture"`)
 	case hasAny(lower, "ping", "网络", "连通", "network"):
 		m.localPing(ctx, text)
 	default:
@@ -443,9 +450,14 @@ func (m *Manager) localInspect(ctx context.Context, target string) {
 	}
 
 	const summary = "uname -a; uptime; echo '--- disk ---'; df -h; echo '--- mem ---'; free -m"
+	const summaryWin = `powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,TotalVisibleMemorySize,FreePhysicalMemory; Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize"`
 	if target == TargetLocal {
 		m.emit(Event{Kind: KindAssistant, Text: "检查本机（Local）状态…"})
-		if _, err := m.runTool(ctx, "local_exec", map[string]any{"command": summary}, true); err != nil {
+		cmd := summary
+		if runtime.GOOS == "windows" {
+			cmd = summaryWin
+		}
+		if _, err := m.runTool(ctx, "local_exec", map[string]any{"command": cmd}, true); err != nil {
 			m.emit(Event{Kind: KindError, Text: err.Error()})
 		}
 	} else if tool := m.remoteExecTool(); tool != "" {
@@ -468,9 +480,14 @@ func (m *Manager) localInspect(ctx context.Context, target string) {
 	m.emit(Event{Kind: KindAssistant, Text: "巡检完成。"})
 }
 
-// localRun executes a built-in read-only command on the selected target.
-func (m *Manager) localRun(ctx context.Context, target, label, cmd string) {
+// localRun executes a built-in read-only command on the selected target. winCmd
+// is the Windows equivalent, used only when the Local target runs on Windows;
+// remote targets are Linux boards and always use the Unix form.
+func (m *Manager) localRun(ctx context.Context, target, label, cmd, winCmd string) {
 	if target == TargetLocal {
+		if runtime.GOOS == "windows" && winCmd != "" {
+			cmd = winCmd
+		}
 		m.emit(Event{Kind: KindAssistant, Text: "在本机（Local）读取" + label + "…"})
 		if _, err := m.runTool(ctx, "local_exec", map[string]any{"command": cmd}, true); err != nil {
 			m.emit(Event{Kind: KindError, Text: err.Error()})

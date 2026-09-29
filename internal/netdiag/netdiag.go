@@ -34,7 +34,11 @@ func Ping(ctx context.Context, host string, count int) (string, error) {
 	if count <= 0 {
 		count = 4
 	}
-	cmd := exec.CommandContext(ctx, "ping", "-c", strconv.Itoa(count), host)
+	args := []string{"-c", strconv.Itoa(count), host}
+	if runtime.GOOS == "windows" {
+		args = []string{"-n", strconv.Itoa(count), host}
+	}
+	cmd := exec.CommandContext(ctx, "ping", args...)
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
 	if err != nil && text == "" {

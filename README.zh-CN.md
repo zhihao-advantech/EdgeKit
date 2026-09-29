@@ -47,6 +47,40 @@ sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-de
 sudo usermod -aG dialout "$USER"
 ```
 
+### Windows
+
+- **运行环境**：Windows 10/11，需 **WebView2 Runtime**（随 Edge 一起提供，通常已装；
+  否则安装 Evergreen Runtime）。
+- **构建**：需要 cgo 与 Windows C/C++ 工具链——`zig`
+  （`zig cc -target x86_64-windows-gnu`）或 mingw-w64。脚本会优先使用 `PATH` 中的
+  工具，或用 `CC`/`CXX` 指定：
+
+```bash
+make windows            # 在 Linux/macOS 上交叉编译出 dist/edgekit.exe
+# 或在 Windows 本机（已装工具链）：
+packaging/build-windows.sh edgekit.exe
+```
+
+生成的 `edgekit.exe` 为无控制台窗口的 GUI 程序；`edgekit.exe mcp` 仍可作为 stdio
+MCP 桥接使用。
+
+#### Windows 提示「不安全的/未知发布者」（SmartScreen）
+
+未签名、且带 Internet 标记（Mark of the Web，从网络/邮件下载）的 exe 会触发
+SmartScreen。解决办法：
+
+- **签名**：给构建脚本传入代码签名证书：
+  ```bash
+  WINDOWS_PFX=my.pfx WINDOWS_PFX_PASS=secret \
+  WINDOWS_TIMESTAMP_URL=http://timestamp.digicert.com \
+    packaging/build-windows.sh
+  ```
+  OV 证书会逐步积累信誉；EV 证书或链到企业受信任根/发布者的证书可立即信任。
+- **企业内网**：用内部 CA 签发证书，并通过 GPO/Intune 把该 CA 部署到每台机器
+  （受信任的根 + 受信任的发布者），不再弹窗。
+- **单机**：右键文件 → 属性 → 勾选「解除锁定」，或 PowerShell 执行
+  `Unblock-File .\edgekit.exe`。通过局域网共享拷贝或本机构建则不携带该标记。
+
 ## 构建与运行
 
 ```bash

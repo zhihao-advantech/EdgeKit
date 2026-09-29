@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"edgekit/internal/kit"
@@ -56,7 +57,12 @@ func hostExec(ctx context.Context, command string, maxBytes int) (string, error)
 	if maxBytes <= 0 {
 		maxBytes = 64 * 1024
 	}
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "cmd", "/c", command)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", command)
+	}
 	buf := &capBuffer{max: maxBytes}
 	cmd.Stdout = buf
 	cmd.Stderr = buf

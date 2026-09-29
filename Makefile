@@ -36,7 +36,7 @@ export CGO_LDFLAGS
 PKGDIR ?= packaging
 DIST   ?= dist
 
-.PHONY: all build run headless vet tidy fmt clean shim info package package-deb package-run
+.PHONY: all build run headless vet tidy fmt clean shim info package package-deb package-run windows
 
 all: build
 
@@ -83,3 +83,8 @@ package-run: build
 
 # Both package formats for the current build variant.
 package: package-deb package-run
+
+# Windows (amd64) executable. Needs a Windows C/C++ toolchain: `zig` (or
+# mingw-w64) in PATH, or CC/CXX set explicitly. See packaging/build-windows.sh.
+windows:
+	VERSION="$(VERSION)" $(PKGDIR)/build-windows.sh "$(DIST)/edgekit.exe"

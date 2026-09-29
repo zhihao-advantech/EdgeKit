@@ -10,6 +10,9 @@ package webview
 #cgo darwin CXXFLAGS: -DWEBVIEW_COCOA -std=c++11
 #cgo darwin LDFLAGS: -framework WebKit -ldl
 
+#cgo windows CXXFLAGS: -DWEBVIEW_EDGE -DWEBVIEW_STATIC -std=c++14 -I${SRCDIR}/libs/mswebview2/include
+#cgo windows LDFLAGS: -static -ladvapi32 -lole32 -lshell32 -lshlwapi -luser32 -lversion
+
 #include "webview.h"
 
 #include <stdlib.h>

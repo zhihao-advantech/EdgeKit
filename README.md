@@ -59,6 +59,43 @@ Serial access (add your user to `dialout`, then log in again):
 sudo usermod -aG dialout "$USER"
 ```
 
+### Windows
+
+- **Runtime**: Windows 10/11 with the **WebView2 Runtime** (bundled with Edge,
+  so normally already present; otherwise install the Evergreen Runtime).
+- **Build**: requires cgo and a Windows C/C++ toolchain — either `zig`
+  (`zig cc -target x86_64-windows-gnu`) or mingw-w64. The build script picks
+  whichever is in `PATH`, or honours `CC`/`CXX`:
+
+```bash
+make windows            # -> dist/edgekit.exe (cross-compiles from Linux/macOS)
+# or, on Windows with a toolchain:
+packaging/build-windows.sh edgekit.exe
+```
+
+The resulting `edgekit.exe` is a windowed binary; `edgekit.exe mcp` still works
+as the stdio MCP bridge.
+
+#### "Windows protected your PC" (SmartScreen)
+
+An unsigned exe that carries the Mark of the Web (downloaded from the internet
+/ email) triggers SmartScreen's "unknown publisher" prompt. Options:
+
+- **Sign it.** Pass a code-signing certificate to the build script:
+  ```bash
+  WINDOWS_PFX=my.pfx WINDOWS_PFX_PASS=secret \
+  WINDOWS_TIMESTAMP_URL=http://timestamp.digicert.com \
+    packaging/build-windows.sh
+  ```
+  An OV certificate builds SmartScreen reputation over time; an EV certificate
+  or a certificate whose chain is deployed to the fleet's Trusted Publishers is
+  trusted immediately.
+- **Internal fleet**: sign with an internal CA certificate and deploy that CA to
+  each machine (Trusted Root + Trusted Publishers) via GPO/Intune — no prompt.
+- **Single machine**: right-click the file → Properties → tick *Unblock*, or
+  `Unblock-File .\edgekit.exe` in PowerShell. Copying the exe over a LAN share
+  (or building it locally) avoids the Mark of the Web entirely.
+
 ## Build and run
 
 ```bash

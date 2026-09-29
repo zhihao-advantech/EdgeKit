@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -674,11 +675,19 @@ func (m *testManager) handleOpenDir(c *client, msg message) {
 		m.s.sendError(c, err)
 		return
 	}
-	if _, err := exec.LookPath("xdg-open"); err != nil {
-		m.s.sendError(c, fmt.Errorf("未找到 xdg-open，无法打开文件夹：%s", abs))
-		return
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", abs)
+	case "darwin":
+		cmd = exec.Command("open", abs)
+	default:
+		if _, err := exec.LookPath("xdg-open"); err != nil {
+			m.s.sendError(c, fmt.Errorf("未找到 xdg-open，无法打开文件夹：%s", abs))
+			return
+		}
+		cmd = exec.Command("xdg-open", abs)
 	}
-	cmd := exec.Command("xdg-open", abs)
 	if err := cmd.Start(); err != nil {
 		m.s.sendError(c, err)
 		return
