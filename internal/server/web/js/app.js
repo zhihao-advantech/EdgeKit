@@ -338,6 +338,7 @@
     kits: { kits: [] },
     // Test sessions (TestRun): connect → run → generate → archive.
     tests: new Map(),
+    testDefs: { definitions: [], runs: [] },
     activeTestId: null,
     testDraft: null,
     testStep: "connect",
@@ -765,6 +766,11 @@
       case "timeline.records": onTimelineRecords(msg.payload || {}); break;
       case "test.created": onTestCreated(msg.payload || {}); break;
       case "test.state": onTestState(msg.payload || {}); break;
+      case "test.defs": onTestDefs(msg.payload || {}); break;
+      case "test.definition": onTestDefinition(msg.payload || {}); break;
+      case "test.saved":
+        toast("已保存到工作区：" + ((msg.payload && msg.payload.path) || ""));
+        break;
       case "error": onError(msg.payload && msg.payload.message); break;
       default: break;
     }
@@ -1640,6 +1646,7 @@
     state.testOpen = true;
     $("tab-test").classList.remove("hidden");
     activateSession("test");
+    send("test.defs"); // refresh saved definitions and archived runs
   }
   function closeTestTab() {
     state.testOpen = false;
@@ -1705,21 +1712,67 @@
     if (state.activeTestId === run.id && state.activeTab === "test") renderTestView();
     updatePill();
   }
+  function onTestDefs(p) {
+    state.testDefs = { definitions: p.definitions || [], runs: p.runs || [] };
+    renderTestList();
+  }
+  function onTestDefinition(p) {
+    state.testDraft = defToDraft(p.definition || {});
+    state.activeTestId = null;
+    state.testStep = "connect";
+    renderTestView();
+    toast("已加载 " + (p.path || "测试定义"));
+  }
+  function saveDefinition() {
+    const def = draftToDef();
+    if (!def.checks.length) { toast("请至少添加一条检查"); return; }
+    send("test.save", { name: def.name, definition: def });
+  }
+  function showDefinitions() {
+    const defs = state.testDefs.definitions || [];
+    if (!defs.length) { toast("工作区 tests/ 下暂无 .test.json 定义"); return; }
+    const rows = defs
+      .map((d) => `<button class="btn small block def-pick" data-def="${esc(d.path)}">${esc(d.name)}<span class="muted"> · ${esc(d.path)}</span></button>`)
+      .join("");
+    showModal("从工作区加载测试定义", `<p class="muted">选择 <code>tests/</code> 下的定义载入编辑器：</p><div class="def-list">${rows}</div>`);
+    document.querySelectorAll("#modal-body .def-pick").forEach((b) => {
+      b.addEventListener("click", () => {
+        send("test.load", { path: b.dataset.def });
+        closeModal();
+      });
+    });
+  }
+  function openArchivedRun(id) {
+    state.activeTestId = id;
+    state.testStep = "run";
+    send("test.open", { runId: id });
+    openTestView();
+  }
   function renderTestList() {
     const ul = $("test-list");
     if (!ul) return;
     ul.textContent = "";
+    const seen = new Set();
     for (const run of state.tests.values()) {
-      const li = document.createElement("li");
-      li.className = "session-item" + (run.id === state.activeTestId ? " active" : "");
-      li.dataset.test = run.id;
-      const dot = run.status === "passed" ? "on" : (run.status === "failed" ? "err" : "");
-      li.innerHTML = `<span class="s-ico test">${TEST_SVG}</span>
-        <span class="s-info"><b>${esc(run.name || "测试")}</b><small>${esc(runStatusLabel(run))}</small></span>
-        <span class="s-dot ${dot}"></span>`;
-      li.addEventListener("click", () => selectTestRun(run.id));
-      ul.appendChild(li);
+      seen.add(run.id);
+      ul.appendChild(testListItem(run.id, run.name, run.status, () => selectTestRun(run.id)));
     }
+    for (const r of state.testDefs.runs || []) {
+      if (seen.has(r.id)) continue;
+      ul.appendChild(testListItem(r.id, r.name, r.status, () => openArchivedRun(r.id), "归档"));
+    }
+  }
+  function testListItem(id, name, status, onClick, tag) {
+    const li = document.createElement("li");
+    li.className = "session-item" + (id === state.activeTestId ? " active" : "");
+    li.dataset.test = id;
+    const dot = status === "passed" ? "on" : (status === "failed" ? "err" : "");
+    const sub = (tag ? tag + " · " : "") + runStatusLabel({ status });
+    li.innerHTML = `<span class="s-ico test">${TEST_SVG}</span>
+      <span class="s-info"><b>${esc(name || "测试")}</b><small>${esc(sub)}</small></span>
+      <span class="s-dot ${dot}"></span>`;
+    li.addEventListener("click", onClick);
+    return li;
   }
   function selectTestRun(id) {
     state.activeTestId = id;
@@ -1863,6 +1916,8 @@
       $("tab-test-label").textContent = "测试 · " + ($("test-name").value || "测试");
     });
     $("test-add").addEventListener("click", () => { state.testDraft.checks.push(blankCheck()); renderChecks(); });
+    $("test-load").addEventListener("click", showDefinitions);
+    $("test-save").addEventListener("click", saveDefinition);
     $("test-start").addEventListener("click", startTest);
     $("test-abort").addEventListener("click", abortTest);
   }

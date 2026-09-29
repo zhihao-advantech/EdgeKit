@@ -1359,6 +1359,14 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.tests.handlePhase(c, msg)
 	case "test.abort":
 		s.tests.handleAbort(c, msg)
+	case "test.defs":
+		s.tests.handleDefs(c)
+	case "test.save":
+		s.tests.handleSave(c, msg)
+	case "test.load":
+		s.tests.handleLoad(c, msg)
+	case "test.open":
+		s.tests.handleOpen(c, msg)
 	case "session.close":
 		s.closeSession(msg.SessionID)
 	case "agent.send":

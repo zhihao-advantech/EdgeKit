@@ -124,10 +124,12 @@ mode 0600).
 
 ### Test sessions
 
-Create one from "Test sessions → +" in the session list: the right pane drives
-four steps, **connect → run → generate → archive**. A case is a list of commands
-with expected output (regexp), an optional timeout and exit-code check. Results
-and a Markdown report are archived under
+Create one from "Test sessions → +" in the session list, or the "测试会话" tab in
+the tab strip: the right pane drives four steps,
+**connect → run → generate → archive**. A case is a list of commands with
+expected output (regexp), an optional timeout and exit-code check. Cases can be
+saved to the workspace as `tests/<name>.test.json` (edit the file directly and
+reload it, too), and results plus a Markdown report are archived under
 `~/EdgeKit/workspace/tests/runs/<id>/`; a failed run is still reported and
 archived.
 

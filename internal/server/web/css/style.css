@@ -659,3 +659,5 @@ button#btn-kits { margin-bottom: 0; }
   font-family: inherit; border-style: dashed; color: var(--ink-dim); background: transparent;
 }
 .tab.tab-new:hover { background: #e9eef4; color: var(--ink); }
+.def-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.def-list .btn { text-align: left; justify-content: flex-start; }

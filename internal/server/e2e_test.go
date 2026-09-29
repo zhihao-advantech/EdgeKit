@@ -626,3 +626,70 @@ func TestE2ETestRunPipeline(t *testing.T) {
 		t.Fatalf("archived run.json unreadable: %v", err)
 	}
 }
+
+// TestE2ETestDefinitionsAndHistory covers the workspace-backed definition flow:
+// save → list → load, plus opening an archived run.
+func TestE2ETestDefinitionsAndHistory(t *testing.T) {
+	_, c := startE2EServer(t)
+
+	c.send("test.save", map[string]any{"name": "smoke", "definition": map[string]any{
+		"name":   "smoke",
+		"checks": []any{map[string]any{"name": "ok", "command": "true", "exitZero": true}},
+	}})
+	var saved struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(c.until("test.saved").Payload, &saved); err != nil {
+		t.Fatalf("decode test.saved: %v", err)
+	}
+	if saved.Path == "" || saved.Name != "smoke" {
+		t.Fatalf("saved = %+v", saved)
+	}
+
+	var defs struct {
+		Definitions []struct {
+			Path string `json:"path"`
+			Name string `json:"name"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(c.until("test.defs").Payload, &defs); err != nil {
+		t.Fatalf("decode test.defs: %v", err)
+	}
+	found := false
+	for _, d := range defs.Definitions {
+		if d.Name == "smoke" && d.Path == saved.Path {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("saved definition not listed: %+v", defs.Definitions)
+	}
+
+	c.send("test.load", map[string]any{"path": saved.Path})
+	var loaded struct {
+		Path       string             `json:"path"`
+		Definition testrun.Definition `json:"definition"`
+	}
+	if err := json.Unmarshal(c.until("test.definition").Payload, &loaded); err != nil {
+		t.Fatalf("decode test.definition: %v", err)
+	}
+	if loaded.Definition.Name != "smoke" || len(loaded.Definition.Checks) != 1 {
+		t.Fatalf("loaded = %+v", loaded.Definition)
+	}
+
+	// Opening an archived run replays it to the client.
+	run := testrun.NewRun("run-arch-1", "arch", "serial-1", testrun.Definition{Name: "arch"})
+	run.Status = testrun.StatusPassed
+	if _, err := (testrun.Store{}).Archive(run); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	c.send("test.open", map[string]any{"runId": "run-arch-1"})
+	var got testrun.Run
+	if err := json.Unmarshal(c.until("test.state").Payload, &got); err != nil {
+		t.Fatalf("decode test.state: %v", err)
+	}
+	if got.ID != "run-arch-1" || got.Name != "arch" {
+		t.Fatalf("opened run = %+v", got)
+	}
+}

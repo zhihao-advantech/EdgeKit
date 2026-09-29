@@ -133,6 +133,83 @@ func (m *testManager) runner(id string) *testrun.Runner {
 }
 
 /* ------------------------------------------------------------------ *
+ * workspace definitions and history
+ * ------------------------------------------------------------------ */
+
+// handleDefs lists the saved test cases and archived runs.
+func (m *testManager) handleDefs(c *client) {
+	store := testrun.Store{}
+	m.s.sendTo(c, "test.defs", map[string]any{
+		"definitions": store.ListDefinitions(),
+		"runs":        store.ListRuns(),
+	})
+}
+
+// handleSave stores a test case in the workspace.
+func (m *testManager) handleSave(c *client, msg message) {
+	var p struct {
+		Name       string             `json:"name"`
+		Definition testrun.Definition `json:"definition"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	if p.Definition.Name == "" {
+		p.Definition.Name = p.Name
+	}
+	rel, err := (testrun.Store{}).WriteDefinition(p.Definition)
+	if err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	m.s.sendTo(c, "test.saved", map[string]any{"path": rel, "name": p.Definition.Name})
+	m.broadcastDefs()
+}
+
+// handleLoad reads a saved test case into the editor.
+func (m *testManager) handleLoad(c *client, msg message) {
+	var p struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	def, err := (testrun.Store{}).ReadDefinition(p.Path)
+	if err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	m.s.sendTo(c, "test.definition", map[string]any{"path": p.Path, "definition": def})
+}
+
+// handleOpen loads an archived run and replays it to the caller.
+func (m *testManager) handleOpen(c *client, msg message) {
+	var p struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	run, err := (testrun.Store{}).ReadRun(p.RunID)
+	if err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	m.s.sendTo(c, "test.state", run)
+}
+
+func (m *testManager) broadcastDefs() {
+	store := testrun.Store{}
+	m.s.broadcast("test.defs", map[string]any{
+		"definitions": store.ListDefinitions(),
+		"runs":        store.ListRuns(),
+	})
+}
+
+/* ------------------------------------------------------------------ *
  * device adapter: drives one session through the host capabilities
  * ------------------------------------------------------------------ */
 
