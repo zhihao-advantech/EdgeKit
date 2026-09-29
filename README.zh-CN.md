@@ -23,8 +23,11 @@ AI Agent、串口调试、SSH 终端、SFTP 工作区文件管理，支持**同�
   `CodeEdit` / `Timeline` / `Sessions` / `Test`，共 28 个工具；可在「工具 → Kits 管理」启停，
   依赖设备的 Kit 在未连接设备时自动隐藏。
 - **MCP**：`edgekit mcp` 把同一套工具暴露给 OpenClaw / Claude Code 等外部 Agent。
-- **连接器（外部 MCP）**：作为 MCP **客户端**连接外部 MCP 服务（知识库 / RAG 等），
-  其工具并入同一工具面（名称加连接器前缀），在「工具 → 连接器（MCP）」中连接 / 停用 / 重连。
+- **连接器 / 技能（右侧并列面板）**：整个界面最右侧的两个同级面板。
+  **连接器**：作为 MCP **客户端**连接外部 MCP 服务（知识库、数据库、文件系统等），
+  其工具并入同一工具面（名称加连接器前缀），支持添加 / 连接 / 停用 / 重连 / 移除；
+  **技能**：列出内置与已安装的 Agent 技能（`~/.agents/skills`），支持安装 / 查看 / 移除。
+  可从「连接器」「技能」按钮、工具菜单或「视图 → 显示连接器 / 技能」打开，两者可同时显示。
 
 ## 环境要求
 
@@ -147,8 +150,8 @@ third_party/webview_go/ WebKit 4.0/4.1 build tag 的 webview fork
 
 ### 外部 MCP 连接器
 
-在 `~/.config/edgekit/connectors.json` 中声明外部 MCP 服务，重启或在
-「工具 → 连接器（MCP）」中刷新即可挂载：
+在右侧 **连接器**面板中点「添加连接器…」即可声明并连接
+（写入 `~/.config/edgekit/connectors.json`）；也可直接编辑该文件，重启或刷新面板即可挂载：
 
 ```json
 {
@@ -160,6 +163,12 @@ third_party/webview_go/ WebKit 4.0/4.1 build tag 的 webview fork
 ```
 
 `risk` 缺省为 `mutate`（需审批）；外部工具名为 `kb_<远端工具名>`，随连接/断开动态出现与消失。
+
+### Agent 技能
+
+与「连接器」并列的 **技能**面板，列出 EdgeKit 内置技能（仓库 `skills/` 目录，
+或环境变量 `EDGEKIT_SKILLS_DIR`）与已安装到 `~/.agents/skills` 的技能。
+「安装」将内置技能链接到 Agent 技能目录，「查看」显示其 `SKILL.md`，「移除」删除已安装副本。
 
 ## 许可证
 

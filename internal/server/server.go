@@ -1307,6 +1307,7 @@ func (s *Server) sendStatus(c *client) {
 	if s.conns != nil {
 		s.sendTo(c, "connectors", map[string]any{"connectors": s.conns.views()})
 	}
+	s.sendTo(c, "skills", s.skillsPayload())
 }
 
 // kitView is one kit as the UI sees it.
@@ -1492,10 +1493,22 @@ func (s *Server) dispatch(c *client, msg message) {
 		s.tests.handleOpenDir(c, msg)
 	case "connectors.list":
 		s.conns.handleList(c)
+	case "connectors.add":
+		s.conns.handleAdd(c, msg)
+	case "connectors.remove":
+		s.conns.handleRemove(c, msg)
 	case "connectors.setEnabled":
 		s.conns.handleSetEnabled(c, msg)
 	case "connectors.reconnect":
 		s.conns.handleReconnect(c, msg)
+	case "skills.list":
+		s.handleSkillsList(c)
+	case "skills.view":
+		s.handleSkillsView(c, msg)
+	case "skills.install":
+		s.handleSkillsInstall(c, msg)
+	case "skills.remove":
+		s.handleSkillsRemove(c, msg)
 	case "session.close":
 		s.closeSession(msg.SessionID)
 	case "agent.send":

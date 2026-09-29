@@ -337,6 +337,8 @@
     },
     kits: { kits: [] },
     connectors: [],
+    skills: [],
+    panes: { connectors: false, skills: false },
     // Test sessions (TestRun): connect → run → generate → archive.
     tests: new Map(),
     testDefs: { definitions: [], runs: [] },
@@ -763,7 +765,14 @@
         break;
       case "connectors":
         state.connectors = (msg.payload && msg.payload.connectors) || [];
-        refreshConnectorsModal();
+        renderMcpConnectors();
+        break;
+      case "skills":
+        state.skills = (msg.payload && msg.payload.skills) || [];
+        renderMcpSkills();
+        break;
+      case "skills.content":
+        showSkillContent(msg.payload || {});
         break;
       case "fs.files": onFSFiles(msg.payload || {}); break;
       case "fs.done": onFSDone(msg.payload || {}); break;
@@ -2147,6 +2156,10 @@
     setChecked("pref-echo", state.term.echo);
     setChecked("toggle-sidebar", state.sidebar);
     setChecked("toggle-workspace", state.ws.visible);
+    setChecked("toggle-connectors", state.panes.connectors);
+    setChecked("toggle-skills", state.panes.skills);
+    $("btn-connectors").classList.toggle("on", state.panes.connectors);
+    $("btn-skills").classList.toggle("on", state.panes.skills);
   }
   // Terminal display preferences are global and persisted: a change applies to
   // every open session right away and to every session opened later, until it
@@ -2200,9 +2213,12 @@
       case "agent-inspect": agentAsk("巡检设备状态"); break;
       case "agent-logs": agentAsk("查看系统日志"); break;
       case "kits": showKits(); break;
-      case "connectors": showConnectors(); break;
+      case "connectors": openPane("connectors"); break;
+      case "skills": openPane("skills"); break;
       case "toggle-sidebar": state.sidebar = !state.sidebar; $("sessions-pane").classList.toggle("hidden", !state.sidebar); break;
       case "toggle-workspace": state.ws.visible = !state.ws.visible; $("workspace").classList.toggle("hidden", !state.ws.visible); $("ws-sides").classList.toggle("hidden", !state.ws.visible); break;
+      case "toggle-connectors": togglePane("connectors", !state.panes.connectors); break;
+      case "toggle-skills": togglePane("skills", !state.panes.skills); break;
       case "font-inc": setFont(state.fontScale + 0.1); break;
       case "font-dec": setFont(state.fontScale - 0.1); break;
       case "font-reset": setFont(1); break;
@@ -2311,7 +2327,7 @@
     $("modal-body").innerHTML = html;
     $("modal").classList.add("show");
   }
-  function closeModal() { kitsModalOpen = false; connectorsModalOpen = false; $("modal").classList.remove("show"); }
+  function closeModal() { kitsModalOpen = false; $("modal").classList.remove("show"); }
   function askText(title, placeholder) {
     return new Promise((resolve) => {
       showModal(title, `<div class="modal-form">
@@ -2427,51 +2443,166 @@
     wireKitsModal();
   }
 
-  // ---- External MCP connectors (knowledge bases / RAG, …) ----
-  let connectorsModalOpen = false;
-  function showConnectors() {
-    connectorsModalOpen = true;
-    send("connectors.list", nil);
-    showModal("连接器（MCP）", connectorsHTML());
-    wireConnectorsModal();
+  /* ------------------------------------------------------------------ *
+   * 右侧并列面板：「连接器」与「技能」同级，可各自独立开合
+   * ------------------------------------------------------------------ */
+  const PANES = {
+    connectors: { pane: "connector-pane", btn: "btn-connectors", list: "connectors.list" },
+    skills: { pane: "skill-pane", btn: "btn-skills", list: "skills.list" },
+  };
+
+  function togglePane(which, open) {
+    const cfg = PANES[which];
+    if (!cfg) return;
+    state.panes[which] = !!open;
+    $(cfg.pane).classList.toggle("hidden", !state.panes[which]);
+    $(cfg.btn).classList.toggle("on", state.panes[which]);
+    setChecked("toggle-" + which, state.panes[which]);
+    if (state.panes[which]) send(cfg.list, nil);
   }
-  function connectorsHTML() {
+
+  function openPane(which) { togglePane(which, true); }
+
+  function renderMcpConnectors() {
+    const box = $("mcp-conn-list");
+    if (!box) return;
     const list = state.connectors || [];
-    const head = '<p class="muted">连接外部 MCP 服务（知识库 / RAG 等），其工具会并入 Agent 与 MCP 工具面。' +
-      '在 <code>~/.config/edgekit/connectors.json</code> 中添加后点「刷新」。</p>' +
-      '<div class="row"><button class="btn small" id="cn-refresh">刷新</button></div>';
     if (!list.length) {
-      return head + '<p class="muted">暂无连接器。</p>';
+      box.innerHTML = '<div class="hint">尚未连接外部服务；点「添加连接器…」通过 MCP 接入。</div>';
+      return;
     }
-    const rows = list.map((c) => {
+    box.innerHTML = list.map((c) => {
       const status = c.connected ? `已连接 · ${c.tools} 个工具` : (c.enabled ? "未连接" : "已停用");
       const err = c.error ? ` · <span class="cn-err">${esc(c.error)}</span>` : "";
       return `<div class="conn-row">
         <div class="cn-info"><b>${esc(c.name || c.id)}</b>
-          <small class="muted">${esc(c.id)} · ${esc(c.command)}</small>
           <small class="muted">${esc(status)}${err}</small></div>
         <div class="cn-actions">
           <button class="btn small cn-toggle" data-id="${esc(c.id)}" data-enable="${c.enabled ? "0" : "1"}">${c.enabled ? "停用" : "启用"}</button>
           <button class="btn small cn-reconnect" data-id="${esc(c.id)}">重连</button>
+          <button class="btn small cn-remove" data-id="${esc(c.id)}">移除</button>
         </div>
       </div>`;
     }).join("");
-    return head + `<div class="conn-list">${rows}</div>`;
-  }
-  function wireConnectorsModal() {
-    const refresh = $("cn-refresh");
-    if (refresh) refresh.addEventListener("click", () => send("connectors.list", nil));
-    document.querySelectorAll("#modal-body .cn-toggle").forEach((b) => b.addEventListener("click", () => {
+    box.querySelectorAll(".cn-toggle").forEach((b) => b.addEventListener("click", () => {
       send("connectors.setEnabled", { id: b.dataset.id, enabled: b.dataset.enable === "1" });
     }));
-    document.querySelectorAll("#modal-body .cn-reconnect").forEach((b) => b.addEventListener("click", () => {
+    box.querySelectorAll(".cn-reconnect").forEach((b) => b.addEventListener("click", () => {
       send("connectors.reconnect", { id: b.dataset.id });
     }));
+    box.querySelectorAll(".cn-remove").forEach((b) => b.addEventListener("click", async () => {
+      if (await confirmDialog("移除连接器", "确定移除连接器 " + b.dataset.id + " 吗？")) {
+        send("connectors.remove", { id: b.dataset.id });
+      }
+    }));
   }
-  function refreshConnectorsModal() {
-    if (!connectorsModalOpen) return;
-    $("modal-body").innerHTML = connectorsHTML();
-    wireConnectorsModal();
+
+  // parseArgs splits a command argument line, honouring double quotes.
+  function parseArgs(s) {
+    const out = [];
+    let cur = "";
+    let quoted = false;
+    for (const ch of String(s || "")) {
+      if (ch === '"') { quoted = !quoted; continue; }
+      if (!quoted && /\s/.test(ch)) {
+        if (cur) { out.push(cur); cur = ""; }
+        continue;
+      }
+      cur += ch;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  function showAddConnector() {
+    showModal("添加连接器（MCP）", `
+      <div class="modal-form">
+        <label class="field"><span>ID（工具命名空间）</span>
+          <input id="cn-id" placeholder="kb" autocomplete="off"></label>
+        <label class="field"><span>名称</span>
+          <input id="cn-name" placeholder="知识库" autocomplete="off"></label>
+        <label class="field"><span>启动命令</span>
+          <input id="cn-command" placeholder="kb-mcp" autocomplete="off"></label>
+        <label class="field"><span>参数（空格分隔，可用双引号）</span>
+          <input id="cn-args" placeholder='--index "/data/kb"' autocomplete="off"></label>
+        <label class="field"><span>风险级别</span>
+          <select id="cn-risk">
+            <option value="read">只读（read，可自动执行）</option>
+            <option value="mutate">修改（mutate，每次确认）</option>
+          </select></label>
+        <label class="tcheck-inline"><input type="checkbox" id="cn-enabled" checked> 保存后立即连接</label>
+        <div class="modal-actions">
+          <button class="btn" id="cn-cancel">取消</button>
+          <button class="btn primary" id="cn-ok">添加并连接</button>
+        </div>
+      </div>`);
+    $("cn-id").focus();
+    $("cn-cancel").addEventListener("click", closeModal);
+    $("cn-ok").addEventListener("click", () => {
+      const id = $("cn-id").value.trim();
+      const command = $("cn-command").value.trim();
+      if (!id) { toast("请填写连接器 ID"); return; }
+      if (!command) { toast("请填写启动命令"); return; }
+      send("connectors.add", {
+        id,
+        name: $("cn-name").value.trim(),
+        command,
+        args: parseArgs($("cn-args").value),
+        risk: $("cn-risk").value,
+        enabled: $("cn-enabled").checked,
+      });
+      closeModal();
+      toast("已添加连接器 " + id);
+      send("connectors.list", nil);
+    });
+  }
+
+  // ---- skills ----
+  function renderMcpSkills() {
+    const box = $("mcp-skill-list");
+    if (!box) return;
+    const list = state.skills || [];
+    if (!list.length) {
+      box.innerHTML = '<div class="hint">未发现技能。</div>';
+      return;
+    }
+    box.innerHTML = list.map((s) => {
+      const tag = s.installed ? (s.builtin ? "内置 · 已安装" : "已安装") : "内置 · 未安装";
+      return `<div class="skill-row">
+        <div class="sk-info"><b>${esc(s.name)}</b>
+          <small>${esc(tag)}${s.description ? " · " + esc(s.description) : ""}</small></div>
+        <div class="cn-actions">
+          <button class="btn small sk-view" data-name="${esc(s.name)}">查看</button>
+          ${s.installed
+            ? `<button class="btn small sk-remove" data-name="${esc(s.name)}">移除</button>`
+            : `<button class="btn small primary sk-install" data-name="${esc(s.name)}">安装</button>`}
+        </div>
+      </div>`;
+    }).join("");
+    box.querySelectorAll(".sk-view").forEach((b) => b.addEventListener("click", () => send("skills.view", { name: b.dataset.name })));
+    box.querySelectorAll(".sk-install").forEach((b) => b.addEventListener("click", () => {
+      send("skills.install", { name: b.dataset.name });
+      toast("正在安装技能 " + b.dataset.name);
+    }));
+    box.querySelectorAll(".sk-remove").forEach((b) => b.addEventListener("click", async () => {
+      if (await confirmDialog("移除技能", "确定移除技能 " + b.dataset.name + " 吗？")) {
+        send("skills.remove", { name: b.dataset.name });
+      }
+    }));
+  }
+
+  function showSkillContent(p) {
+    showModal("技能 · " + (p.name || ""), `<pre class="diff skill-content">${esc(p.content || "")}</pre>`);
+  }
+
+  function setupMcp() {
+    $("btn-connectors").addEventListener("click", () => togglePane("connectors", !state.panes.connectors));
+    $("btn-skills").addEventListener("click", () => togglePane("skills", !state.panes.skills));
+    $("connector-close").addEventListener("click", () => togglePane("connectors", false));
+    $("skill-close").addEventListener("click", () => togglePane("skills", false));
+    $("mcp-conn-add").addEventListener("click", showAddConnector);
+    $("mcp-conn-refresh").addEventListener("click", () => send("connectors.list", nil));
+    $("mcp-skill-refresh").addEventListener("click", () => send("skills.list", nil));
   }
 
   function showAbout() {
@@ -2701,6 +2832,7 @@
   setupNewSession();
   setupWorkspace();
   setupAgent();
+  setupMcp();
   setupTest();
   wirePersist();
   setFont(1);

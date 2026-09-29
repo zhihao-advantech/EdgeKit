@@ -64,7 +64,8 @@
       <div class="mi" data-action="agent-inspect">Agent 设备巡检</div>
       <div class="mi" data-action="agent-logs">Agent 查看日志</div>
       <div class="sep"></div>
-      <div class="mi" data-action="connectors">连接器（MCP）…</div>
+      <div class="mi" data-action="connectors">连接器…</div>
+      <div class="mi" data-action="skills">技能…</div>
       <div class="mi" data-action="kits">Kits 管理…</div>
     </div>
   </div>
@@ -74,6 +75,8 @@
     <div class="dropdown">
       <div class="mi check" data-action="toggle-sidebar">显示会话面板</div>
       <div class="mi check" data-action="toggle-workspace">显示工作区</div>
+      <div class="mi check" data-action="toggle-connectors">显示连接器</div>
+      <div class="mi check" data-action="toggle-skills">显示技能</div>
       <div class="sep"></div>
       <div class="mi" data-action="font-inc">增大字号</div>
       <div class="mi" data-action="font-dec">减小字号</div>
@@ -89,6 +92,8 @@
   </div>
 
   <span class="spacer"></span>
+  <button class="pill clickable" id="btn-connectors" title="外部 MCP 连接器">连接器</button>
+  <button class="pill clickable" id="btn-skills" title="Agent 技能">技能</button>
   <span class="pill" id="pill-active">无活动会话</span>
   <div class="menu menu-right" data-menu="settings">
     <button class="menu-btn icon-only" title="设置" aria-label="设置">
@@ -329,6 +334,39 @@
       </div>
     </div>
   </main>
+
+  <!-- ==================== 右侧：连接器 ==================== -->
+  <aside class="side-pane hidden" id="connector-pane">
+    <div class="pane-title">
+      <span>连接器</span>
+      <button class="iconbtn" id="connector-close" title="关闭">
+        <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+    <div class="side-body">
+      <div class="conn-list" id="mcp-conn-list"></div>
+      <div class="row">
+        <button class="btn small" id="mcp-conn-add">添加连接器…</button>
+        <button class="btn small" id="mcp-conn-refresh">刷新</button>
+      </div>
+      <div class="hint">以 MCP 客户端连接外部服务（知识库、数据库、文件系统等），其工具并入 Agent 与 MCP 工具面。</div>
+    </div>
+  </aside>
+
+  <!-- ==================== 右侧：技能 ==================== -->
+  <aside class="side-pane hidden" id="skill-pane">
+    <div class="pane-title">
+      <span>技能</span>
+      <button class="iconbtn" id="skill-close" title="关闭">
+        <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+    <div class="side-body">
+      <div class="skill-list" id="mcp-skill-list"></div>
+      <button class="btn small block" id="mcp-skill-refresh">刷新</button>
+      <div class="hint">把内置技能安装到 <code>~/.agents/skills</code> 后即可被 Agent 使用。</div>
+    </div>
+  </aside>
 </div>
 
 <!-- ============================ 状态栏 ============================ -->

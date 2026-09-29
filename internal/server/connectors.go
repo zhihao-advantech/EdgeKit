@@ -17,7 +17,7 @@ import (
 )
 
 // connectorConfig is one external MCP server the user wants to attach (a
-// knowledge base / RAG service, a filesystem server, ...).
+// knowledge base, a database, a filesystem server, ...).
 type connectorConfig struct {
 	ID      string            `json:"id"`
 	Name    string            `json:"name,omitempty"`
@@ -338,4 +338,123 @@ func (m *connectorManager) handleReconnect(c *client, msg message) {
 		}
 	}
 	go m.connect(p.ID)
+}
+
+// validConnectorID reports whether id is safe to use as a connector identifier
+// (it becomes the namespace prefix of every tool it contributes).
+func validConnectorID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// handleAdd declares a new external MCP connector (typically a knowledge base,
+// database or similar external resource) from the right-hand connector panel,
+// persists it and connects it when enabled. Adding an existing id overwrites
+// that connector.
+func (m *connectorManager) handleAdd(c *client, msg message) {
+	var p connectorConfig
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	p.ID = strings.TrimSpace(p.ID)
+	p.Command = strings.TrimSpace(p.Command)
+	p.Name = strings.TrimSpace(p.Name)
+	p.Args = trimArgs(p.Args)
+	if !validConnectorID(p.ID) {
+		m.s.sendError(c, fmt.Errorf("连接器 ID 只能包含字母、数字、下划线、短横线和点"))
+		return
+	}
+	if p.Command == "" {
+		m.s.sendError(c, fmt.Errorf("缺少启动命令"))
+		return
+	}
+	if p.Name == "" {
+		p.Name = p.ID
+	}
+	if !strings.EqualFold(p.Risk, "read") {
+		p.Risk = "mutate"
+	}
+
+	list := loadConnectors()
+	replaced := false
+	for i := range list {
+		if list[i].ID == p.ID {
+			list[i] = p
+			replaced = true
+		}
+	}
+	if !replaced {
+		list = append(list, p)
+	}
+	if err := saveConnectors(list); err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+
+	// Stop any previously running instance before swapping in the new config.
+	m.disconnect(p.ID)
+	m.mu.Lock()
+	m.m[p.ID] = &connectorState{cfg: p}
+	m.mu.Unlock()
+
+	if p.Enabled {
+		go m.connect(p.ID)
+	} else {
+		m.broadcastConnectors()
+	}
+}
+
+// handleRemove deletes a connector (stopping it first) from the config.
+func (m *connectorManager) handleRemove(c *client, msg message) {
+	var p struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		m.s.sendError(c, fmt.Errorf("参数错误: %w", err))
+		return
+	}
+	list := loadConnectors()
+	kept := list[:0]
+	removed := false
+	for _, cfg := range list {
+		if cfg.ID == p.ID {
+			removed = true
+			continue
+		}
+		kept = append(kept, cfg)
+	}
+	if !removed {
+		m.s.sendError(c, fmt.Errorf("未知连接器: %s", p.ID))
+		return
+	}
+	if err := saveConnectors(kept); err != nil {
+		m.s.sendError(c, err)
+		return
+	}
+	m.disconnect(p.ID)
+	m.mu.Lock()
+	delete(m.m, p.ID)
+	m.mu.Unlock()
+	m.broadcastConnectors()
+}
+
+// trimArgs drops blank arguments and surrounding whitespace.
+func trimArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }

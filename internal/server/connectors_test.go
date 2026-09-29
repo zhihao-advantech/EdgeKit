@@ -1,6 +1,9 @@
 package server
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestConnectorConfigRoundTrip(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -55,5 +58,66 @@ func TestConnectorBadCommandRecordsError(t *testing.T) {
 	}
 	if _, ok := s.kits.Tool("bad_anything"); ok {
 		t.Fatal("failed connector must not register tools")
+	}
+}
+
+// TestConnectorAddRemoveViaProtocol exercises the UI-facing add/remove path used
+// by the right-hand MCP panel to attach an external service.
+func TestConnectorAddRemoveViaProtocol(t *testing.T) {
+	_, c := startE2EServer(t)
+	c.until("connectors") // drain the initial status snapshot
+
+	c.send("connectors.add", map[string]any{
+		"id": "kb", "name": "知识库", "command": "/nonexistent/kb-mcp",
+		"args": []string{"--index", "/data"}, "risk": "read", "enabled": false,
+	})
+
+	var v struct {
+		Connectors []connectorView `json:"connectors"`
+	}
+	decodeConnectors(t, c.until("connectors").Payload, &v)
+	if len(v.Connectors) != 1 || v.Connectors[0].ID != "kb" || v.Connectors[0].Name != "知识库" {
+		t.Fatalf("connectors = %+v", v.Connectors)
+	}
+	onDisk := loadConnectors()
+	if len(onDisk) != 1 || onDisk[0].ID != "kb" || onDisk[0].Risk != "read" || len(onDisk[0].Args) != 2 {
+		t.Fatalf("persisted = %+v", onDisk)
+	}
+
+	c.send("connectors.remove", map[string]any{"id": "kb"})
+	decodeConnectors(t, c.until("connectors").Payload, &v)
+	if len(v.Connectors) != 0 {
+		t.Fatalf("after remove connectors = %+v", v.Connectors)
+	}
+	if got := loadConnectors(); len(got) != 0 {
+		t.Fatalf("after remove persisted = %+v", got)
+	}
+}
+
+// TestConnectorAddRejectsBadID ensures an unsafe namespace is refused.
+func TestConnectorAddRejectsBadID(t *testing.T) {
+	_, c := startE2EServer(t)
+	c.until("connectors")
+
+	c.send("connectors.add", map[string]any{"id": "bad id!", "command": "/bin/true", "enabled": false})
+	m := c.until("error")
+	var e struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(m.Payload, &e); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if e.Message == "" {
+		t.Fatal("expected an error message")
+	}
+	if got := loadConnectors(); len(got) != 0 {
+		t.Fatalf("invalid connector must not persist: %+v", got)
+	}
+}
+
+func decodeConnectors(t *testing.T, payload json.RawMessage, v any) {
+	t.Helper()
+	if err := json.Unmarshal(payload, v); err != nil {
+		t.Fatalf("decode connectors: %v", err)
 	}
 }

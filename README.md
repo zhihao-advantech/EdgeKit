@@ -33,10 +33,12 @@ talk over a loopback JSON / WebSocket protocol.
   until a matching device is connected.
 - **MCP**: `edgekit mcp` exposes the same tool surface to external agents such
   as OpenClaw and Claude Code.
-- **Connectors (external MCP)**: acts as an MCP **client** to attach external
-  MCP servers (knowledge bases / RAG, …); their tools join the same surface
-  (namespaced by connector) and are managed under
-  "Tools → Connectors (MCP)" (connect / disable / reconnect).
+- **Connectors & Skills (right panels)**: two peer panels on the far right.
+  **Connectors** acts as an MCP **client** to attach external MCP servers; their
+  tools join the same surface, namespaced by connector. **Skills** lists built-in
+  and installed Agent skills under `~/.agents/skills`, with install / view /
+  remove. Opened from the "连接器" / "技能" buttons, the "Tools" menu, or
+  "View → Show connectors / skills".
 
 ## Requirements
 
@@ -177,8 +179,9 @@ third_party/webview_go/ webview fork with WebKit 4.0/4.1 build tags
 
 ### External MCP connectors
 
-Declare external MCP servers in `~/.config/edgekit/connectors.json`, then restart
-or refresh under "Tools → Connectors (MCP)":
+Add one from the **Connectors** panel (far right) via "Add connector…", which
+writes `~/.config/edgekit/connectors.json`; or declare external MCP servers in
+that file directly, then restart or refresh the panel:
 
 ```json
 {
@@ -191,6 +194,13 @@ or refresh under "Tools → Connectors (MCP)":
 
 `risk` defaults to `mutate` (approval-gated); external tools are named
 `kb_<remote-tool>` and appear/disappear as the connector connects.
+
+### Agent skills
+
+The peer **Skills** panel lists the skills bundled with EdgeKit (the repository
+`skills/` directory, or `EDGEKIT_SKILLS_DIR`) and those already installed under
+`~/.agents/skills`. Install links a bundled skill into the Agent skills
+directory, view shows its `SKILL.md`, and remove deletes the installed copy.
 
 ## License
 

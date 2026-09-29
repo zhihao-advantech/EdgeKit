@@ -138,6 +138,8 @@ body {
   font-size: 11.5px; color: var(--ink-dim);
 }
 .pill.ok { color: var(--accent-2); border-color: #a9d5a9; background: var(--accent-soft); }
+.pill.clickable { font-family: inherit; cursor: pointer; }
+.pill.clickable:hover, .pill.clickable.on { color: var(--accent-2); border-color: #a9d5a9; background: var(--accent-soft); }
 
 /* ----------------------------- 工作区布局 ----------------------------- */
 .workspace-layout { flex: 1; min-height: 0; display: flex; }
@@ -703,3 +705,29 @@ button#btn-kits { margin-bottom: 0; }
 .cn-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn-actions { display: flex; gap: 6px; }
 .cn-err { color: var(--red); }
+
+/* ------------------- 右侧面板（连接器 / 技能） ------------------- */
+.side-pane {
+  width: 312px; flex: none;
+  display: flex; flex-direction: column;
+  background: var(--chrome);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+.side-pane.hidden { display: none; }
+.side-body {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.skill-list { display: flex; flex-direction: column; gap: 6px; }
+.skill-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel);
+}
+.sk-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.sk-info b { font-size: 12.5px; }
+.sk-info small {
+  color: var(--ink-faint); font-size: 11px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
