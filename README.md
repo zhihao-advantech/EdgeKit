@@ -59,44 +59,26 @@ Serial access (add your user to `dialout`, then log in again):
 sudo usermod -aG dialout "$USER"
 ```
 
-### Windows
-
-- **Runtime**: Windows 10/11 with the **WebView2 Runtime** (bundled with Edge,
-  so normally already present; otherwise install the Evergreen Runtime).
-- **Build**: requires cgo and a Windows C/C++ toolchain — either `zig`
-  (`zig cc -target x86_64-windows-gnu`) or mingw-w64. The build script picks
-  whichever is in `PATH`, or honours `CC`/`CXX`:
+To cross-compile the **Windows exe** from Ubuntu you additionally need a Windows
+C/C++ toolchain (cgo). Install one of:
 
 ```bash
-make windows            # -> dist/edgekit.exe (cross-compiles from Linux/macOS)
-# or, on Windows with a toolchain:
-packaging/build-windows.sh edgekit.exe
+# Option A — zig (self-contained, no root); ~/.local/bin must be in PATH
+mkdir -p /tmp/zig-install && cd /tmp/zig-install
+curl -LO https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+tar -xf zig-linux-x86_64-0.13.0.tar.xz
+mkdir -p ~/.local/share ~/.local/bin
+mv zig-linux-x86_64-0.13.0 ~/.local/share/zig-0.13.0
+ln -sf ~/.local/share/zig-0.13.0/zig ~/.local/bin/zig
+export PATH="$HOME/.local/bin:$PATH"   # also add this line to ~/.bashrc
+
+# Option B — mingw-w64
+sudo apt install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
 ```
 
-The resulting `edgekit.exe` is a windowed binary; `edgekit.exe mcp` still works
-as the stdio MCP bridge.
+## Build
 
-#### "Windows protected your PC" (SmartScreen)
-
-An unsigned exe that carries the Mark of the Web (downloaded from the internet
-/ email) triggers SmartScreen's "unknown publisher" prompt. Options:
-
-- **Sign it.** Pass a code-signing certificate to the build script:
-  ```bash
-  WINDOWS_PFX=my.pfx WINDOWS_PFX_PASS=secret \
-  WINDOWS_TIMESTAMP_URL=http://timestamp.digicert.com \
-    packaging/build-windows.sh
-  ```
-  An OV certificate builds SmartScreen reputation over time; an EV certificate
-  or a certificate whose chain is deployed to the fleet's Trusted Publishers is
-  trusted immediately.
-- **Internal fleet**: sign with an internal CA certificate and deploy that CA to
-  each machine (Trusted Root + Trusted Publishers) via GPO/Intune — no prompt.
-- **Single machine**: right-click the file → Properties → tick *Unblock*, or
-  `Unblock-File .\edgekit.exe` in PowerShell. Copying the exe over a LAN share
-  (or building it locally) avoids the Mark of the Web entirely.
-
-## Build and run
+### Ubuntu app (`build/edgekit`)
 
 ```bash
 make build          # produces build/edgekit
@@ -121,9 +103,25 @@ make info               # show version and WebKit variant to be built
 > If the link fails with `GLIBCXX_3.4.30`, `make` already works around it; with
 > plain `go build` pass the same `CGO_LDFLAGS`.
 
+### Windows exe (`dist/edgekit.exe`, cross-compiled from Ubuntu)
+
+Uses the Windows C/C++ toolchain from the requirements above (zig is found in
+`PATH`, otherwise passthrough `CC`/`CXX`):
+
+```bash
+make windows                                            # zig in PATH
+CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ make windows   # mingw-w64
+```
+
+The result is a windowed (`windowsgui`) binary; on Windows it needs the
+**WebView2 Runtime** (present with Edge on Win10/11). `edgekit.exe mcp` still
+works as the stdio MCP bridge. Add an Authenticode signature by passing a code
+signing certificate: `WINDOWS_PFX=my.pfx WINDOWS_PFX_PASS=... make windows`.
+
 ## Packaging and installation
 
-Both packages **verify the required system package versions**:
+Both packages **verify the required system package versions** (GTK 3 +
+WebKit2GTK development libraries, installed for the build in Requirements):
 
 ```bash
 make package-deb    # dist/edgekit_<version>_<arch>.deb

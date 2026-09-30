@@ -47,41 +47,25 @@ sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-de
 sudo usermod -aG dialout "$USER"
 ```
 
-### Windows
-
-- **运行环境**：Windows 10/11，需 **WebView2 Runtime**（随 Edge 一起提供，通常已装；
-  否则安装 Evergreen Runtime）。
-- **构建**：需要 cgo 与 Windows C/C++ 工具链——`zig`
-  （`zig cc -target x86_64-windows-gnu`）或 mingw-w64。脚本会优先使用 `PATH` 中的
-  工具，或用 `CC`/`CXX` 指定：
+从 Ubuntu 交叉编译 **Windows exe** 还需要 Windows C/C++ 工具链（cgo）。二选一：
 
 ```bash
-make windows            # 在 Linux/macOS 上交叉编译出 dist/edgekit.exe
-# 或在 Windows 本机（已装工具链）：
-packaging/build-windows.sh edgekit.exe
+# 方案 A —— zig（自带工具链，无需 root）；~/.local/bin 需在 PATH 中
+mkdir -p /tmp/zig-install && cd /tmp/zig-install
+curl -LO https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+tar -xf zig-linux-x86_64-0.13.0.tar.xz
+mkdir -p ~/.local/share ~/.local/bin
+mv zig-linux-x86_64-0.13.0 ~/.local/share/zig-0.13.0
+ln -sf ~/.local/share/zig-0.13.0/zig ~/.local/bin/zig
+export PATH="$HOME/.local/bin:$PATH"   # 并把该行加入 ~/.bashrc
+
+# 方案 B —— mingw-w64
+sudo apt install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
 ```
 
-生成的 `edgekit.exe` 为无控制台窗口的 GUI 程序；`edgekit.exe mcp` 仍可作为 stdio
-MCP 桥接使用。
+## 构建
 
-#### Windows 提示「不安全的/未知发布者」（SmartScreen）
-
-未签名、且带 Internet 标记（Mark of the Web，从网络/邮件下载）的 exe 会触发
-SmartScreen。解决办法：
-
-- **签名**：给构建脚本传入代码签名证书：
-  ```bash
-  WINDOWS_PFX=my.pfx WINDOWS_PFX_PASS=secret \
-  WINDOWS_TIMESTAMP_URL=http://timestamp.digicert.com \
-    packaging/build-windows.sh
-  ```
-  OV 证书会逐步积累信誉；EV 证书或链到企业受信任根/发布者的证书可立即信任。
-- **企业内网**：用内部 CA 签发证书，并通过 GPO/Intune 把该 CA 部署到每台机器
-  （受信任的根 + 受信任的发布者），不再弹窗。
-- **单机**：右键文件 → 属性 → 勾选「解除锁定」，或 PowerShell 执行
-  `Unblock-File .\edgekit.exe`。通过局域网共享拷贝或本机构建则不携带该标记。
-
-## 构建与运行
+### Ubuntu 应用（`build/edgekit`）
 
 ```bash
 make build          # 生成 build/edgekit
@@ -105,9 +89,23 @@ make info               # 查看将构建的版本与 WebKit 变体
 
 > 链接若报 `GLIBCXX_3.4.30`，`make` 已内置规避；改用 `go build` 时请传入相同的 `CGO_LDFLAGS`。
 
+### Windows exe（`dist/edgekit.exe`，在 Ubuntu 上交叉编译）
+
+使用上面的 Windows C/C++ 工具链（`PATH` 中有 zig 即自动使用，否则透传
+`CC`/`CXX`）：
+
+```bash
+make windows                                            # PATH 中有 zig
+CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ make windows   # mingw-w64
+```
+
+产物为无控制台的 `windowsgui` 程序；在 Windows 上需要 **WebView2 Runtime**
+（Win10/11 随 Edge 自带）。`edgekit.exe mcp` 仍可作为 stdio MCP 桥接。需要
+Authenticode 签名时传证书：`WINDOWS_PFX=my.pfx WINDOWS_PFX_PASS=... make windows`。
+
 ## 打包与安装
 
-两种包都会**校验运行时依赖版本**：
+两种包都会**校验运行时依赖版本**（构建所需的 GTK 3 + WebKit2GTK 开发库见「环境要求」）：
 
 ```bash
 make package-deb    # dist/edgekit_<版本>_<架构>.deb
