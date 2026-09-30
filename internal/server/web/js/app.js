@@ -1456,6 +1456,7 @@
       $("m-agent").textContent = "ACP · " + name;
       $("sess-agent-sub").textContent = "ACP · " + name;
       $("agent-hint").textContent = "外部 Agent（" + name + "）通过 ACP 驱动，工具来自 EdgeKit 的 Kits。";
+      $("agent-hint").classList.remove("hidden");
       updatePill();
       updateMenuState();
       return;
@@ -1464,9 +1465,9 @@
     state.agent.mode = ai ? "ai" : "normal";
     $("m-agent").textContent = ai ? "AI 模式" : "Normal 模式";
     $("sess-agent-sub").textContent = ai ? (state.agent.model || "AI 模式") : "Normal 模式";
-    $("agent-hint").textContent = ai
-      ? "已配置模型，可用自然语言驱动串口 / SSH / 工作区。"
-      : "未配置 API Key，使用 Normal 模式（内置流程）。";
+    const hint = $("agent-hint");
+    hint.textContent = ai ? "" : "未配置 API Key，使用 Normal 模式（内置流程）。";
+    hint.classList.toggle("hidden", ai);
     updatePill();
     updateMenuState();
   }
@@ -1524,10 +1525,68 @@
   function appendAgentMessage(role, text) {
     const div = document.createElement("div");
     div.className = "msg " + role;
-    div.textContent = text;
+    // User and error text stays verbatim; assistant output is rendered as a
+    // small, safe subset of Markdown so headings, lists and code read well.
+    if (role === "assistant") div.innerHTML = renderMarkdown(text);
+    else div.textContent = text;
     const chat = $("agent-chat");
     chat.appendChild(div);
     chat.scrollTop = chat.scrollHeight;
+  }
+
+  // mdInline formats inline spans; the input is already HTML-escaped.
+  function mdInline(s) {
+    return s
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  }
+
+  // renderMarkdown converts assistant text into escaped HTML for a safe subset
+  // of Markdown: fenced code, headings, ordered/unordered lists, bold, italic,
+  // inline code and links. Everything else is kept as plain, line-broken text.
+  function renderMarkdown(text) {
+    const lines = String(text == null ? "" : text).replace(/\r\n?/g, "\n").split("\n");
+    let html = "";
+    let code = null;
+    let list = null;
+    let para = [];
+
+    const flushPara = () => {
+      if (para.length) { html += "<p>" + para.map(mdInline).join("<br>") + "</p>"; para = []; }
+    };
+    const closeList = () => { if (list) { html += "</" + list + ">"; list = null; } };
+
+    for (const line of lines) {
+      if (/^\s*```/.test(line)) {
+        if (code !== null) { html += "<pre class=\"md-code\"><code>" + esc(code.join("\n")) + "</code></pre>"; code = null; }
+        else { flushPara(); closeList(); code = []; }
+        continue;
+      }
+      if (code !== null) { code.push(line); continue; }
+      if (/^\s*$/.test(line)) { flushPara(); closeList(); continue; }
+
+      const h = line.match(/^(#{1,6})\s+(.*)$/);
+      if (h) { flushPara(); closeList(); html += '<div class="md-h md-h' + h[1].length + '">' + mdInline(esc(h[2])) + "</div>"; continue; }
+
+      const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+      const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+      if (ul || ol) {
+        const kind = ul ? "ul" : "ol";
+        flushPara();
+        if (list !== kind) { closeList(); html += "<" + kind + ">"; list = kind; }
+        html += "<li>" + mdInline(esc((ul || ol)[1])) + "</li>";
+        continue;
+      }
+
+      closeList();
+      para.push(esc(line));
+    }
+    if (code !== null) html += "<pre class=\"md-code\"><code>" + esc(code.join("\n")) + "</code></pre>";
+    flushPara();
+    closeList();
+    return html;
   }
   function upsertToolCard(ev) {
     const key = ev.tool + "\u0000" + (ev.args || "");
